@@ -1,0 +1,20 @@
+services:
+  proxy:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Required: Zulip Gitea integration endpoint (with api_key, stream, topic)
+      ZULIP_GITEA_WEBHOOK_URL: "https://chat.example.org/api/v1/external/gitea?api_key=XXX&stream=git&topic=myrepo"
+
+      # Required for pull_request_review_rejected notifications (bot API)
+      ZULIP_SITE: "https://chat.example.org"
+      ZULIP_BOT_EMAIL: "bot@example.org"
+      ZULIP_BOT_API_KEY: "your-bot-api-key"
+
+      # Optional overrides
+      # ZULIP_STREAM: "git"       # defaults to stream from ZULIP_GITEA_WEBHOOK_URL
+      # ZULIP_TOPIC: "my-repo"    # defaults to repository.name from payload
+      # FORGEJO_SECRET: "..."     # shared secret for HMAC signature validation
+      # PORT: "8080"
