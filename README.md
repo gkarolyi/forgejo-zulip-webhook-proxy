@@ -4,20 +4,34 @@ A small Go proxy that fills the gap between Forgejo's webhook events and Zulip's
 
 ## Why
 
-Zulip's Gitea integration handles `push` and basic `pull_request` events (open/close/merge) but doesn't know about:
-- `pull_request_comment` — Forgejo uses this header (not `issue_comment`) for PR comments, causing a 400 from Zulip
-- `pull_request_review` / `pull_request_review_rejected` — review approvals and change requests; Zulip has no handler for these
+Zulip's Gitea integration handles a subset of events natively (`push`, `create`, `pull_request`, `issues`, `issue_comment`, `release`) but doesn't support:
 
-This proxy sits between Forgejo and Zulip and fixes both.
+- `pull_request_comment` — Forgejo uses a different header than `issue_comment`, causing 400s from Zulip
+- `pull_request_review` / `pull_request_review_rejected` — review approvals and rejections
+- `pull_request_review_comment` — inline code review comments
+- `pull_request_sync`, `pull_request_review_request` — PR workflow notifications
+- `pull_request_assign/label/milestone` and `issue_assign/label/milestone` — metadata changes
+
+This proxy sits between Forgejo and Zulip and handles all of them.
 
 ## What it does
 
-| Forgejo event | Proxy action |
+| Forgejo event | Action |
 |---|---|
-| `pull_request_comment` | Remaps payload to `issue_comment` format, forwards to Zulip Gitea webhook |
-| `pull_request_review` | Posts `APPROVED: reviewer on #N title` (or `REJECTED:`) via Zulip bot API |
+| `pull_request_comment` | Remaps to `issue_comment` format, forwards to Zulip Gitea webhook |
+| `pull_request_review` | Posts `APPROVED: reviewer on #N title` via Zulip bot API |
 | `pull_request_review_rejected` | Posts `REJECTED: reviewer on #N title` via Zulip bot API |
-| Everything else (`push`, `pull_request`, etc.) | Forwarded as-is to Zulip Gitea webhook |
+| `pull_request_review_comment` | Posts `user commented on file:line in #N title` via Zulip bot API |
+| `pull_request_sync` | Posts `user synchronized #N title` via Zulip bot API |
+| `pull_request_review_request` | Posts `user requested review from X on #N title` via Zulip bot API |
+| `pull_request_assign` | Posts `user assigned X to #N title` via Zulip bot API |
+| `pull_request_label` | Posts `user added label "X" to #N title` via Zulip bot API |
+| `pull_request_milestone` | Posts `user set milestone "X" on #N title` via Zulip bot API |
+| `issue_assign` | Posts `user assigned X to #N title` via Zulip bot API |
+| `issue_label` | Posts `user added label "X" to #N title` via Zulip bot API |
+| `issue_milestone` | Posts `user set milestone "X" on #N title` via Zulip bot API |
+| `push`, `create`, `pull_request`, `issues`, `issue_comment`, `release` | Forwarded as-is to Zulip Gitea webhook |
+| Unknown events | Forwarded; silently dropped if Zulip returns 4xx (unsupported) |
 
 ## Setup
 
@@ -48,11 +62,11 @@ Set `FORGEJO_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 | Variable | Required | Description |
 |---|---|---|
 | `ZULIP_GITEA_WEBHOOK_URL` | Yes | Full Zulip Gitea integration URL (with `api_key`, `stream`, `topic` params) |
-| `ZULIP_SITE` | For reviews | Zulip instance base URL, e.g. `https://chat.example.org` |
-| `ZULIP_BOT_EMAIL` | For reviews | Bot email |
-| `ZULIP_BOT_API_KEY` | For reviews | Bot API key |
-| `ZULIP_STREAM` | No | Override stream for review notifications (defaults to stream from webhook URL) |
-| `ZULIP_TOPIC` | No | Override topic for review notifications (defaults to repo name) |
+| `ZULIP_SITE` | Yes | Zulip instance base URL, e.g. `https://chat.example.org` |
+| `ZULIP_BOT_EMAIL` | Yes | Bot email for posting via Zulip API |
+| `ZULIP_BOT_API_KEY` | Yes | Bot API key |
+| `ZULIP_STREAM` | No | Override stream for bot API messages (defaults to stream from webhook URL) |
+| `ZULIP_TOPIC` | No | Override topic for bot API messages (defaults to repo name) |
 | `FORGEJO_SECRET` | No | Shared secret for HMAC signature validation |
 | `PORT` | No | Port to listen on (default: 8080) |
 

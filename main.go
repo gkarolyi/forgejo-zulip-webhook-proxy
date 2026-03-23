@@ -267,9 +267,10 @@ func (p *proxy) handlePullRequestReviewRequest(pl payload) error {
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
-// handlePullRequestAssign handles pull_request_assign events.
-func (p *proxy) handlePullRequestAssign(pl payload) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
+// handleAssign handles pull_request_assign and issue_assign events.
+// entityKey is "pull_request" or "issue".
+func (p *proxy) handleAssign(pl payload, entityKey string) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
 
 	assignee := ""
 	if a := getMap(pl, "assignee"); a != nil {
@@ -296,9 +297,10 @@ func (p *proxy) handlePullRequestAssign(pl payload) error {
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
-// handlePullRequestLabel handles pull_request_label events.
-func (p *proxy) handlePullRequestLabel(pl payload) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
+// handleLabel handles pull_request_label and issue_label events.
+// entityKey is "pull_request" or "issue".
+func (p *proxy) handleLabel(pl payload, entityKey string) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
 
 	label := ""
 	if l := getMap(pl, "label"); l != nil {
@@ -325,92 +327,10 @@ func (p *proxy) handlePullRequestLabel(pl payload) error {
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
-// handlePullRequestMilestone handles pull_request_milestone events.
-func (p *proxy) handlePullRequestMilestone(pl payload) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
-
-	milestone := ""
-	if m := getMap(pl, "milestone"); m != nil {
-		milestone = getString(m, "title")
-	}
-
-	ref := buildRef(number, title, htmlURL)
-	var msg string
-	if getString(pl, "action") == "demilestoned" {
-		msg = fmt.Sprintf("**[%s]** %s removed milestone from %s", repoName, sender, ref)
-	} else if milestone != "" {
-		msg = fmt.Sprintf("**[%s]** %s set milestone \"%s\" on %s", repoName, sender, milestone, ref)
-	} else {
-		msg = fmt.Sprintf("**[%s]** %s updated milestone on %s", repoName, sender, ref)
-	}
-
-	stream, topic := p.resolveStreamAndTopic(pl)
-	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// --- Issue metadata event handlers ---
-
-// handleIssueAssign handles issue_assign events.
-func (p *proxy) handleIssueAssign(pl payload) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "issue")
-
-	assignee := ""
-	if a := getMap(pl, "assignee"); a != nil {
-		assignee = getString(a, "login")
-	}
-
-	ref := buildRef(number, title, htmlURL)
-	var msg string
-	if getString(pl, "action") == "unassigned" {
-		if assignee != "" {
-			msg = fmt.Sprintf("**[%s]** %s unassigned %s from %s", repoName, sender, assignee, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s unassigned someone from %s", repoName, sender, ref)
-		}
-	} else {
-		if assignee != "" {
-			msg = fmt.Sprintf("**[%s]** %s assigned %s to %s", repoName, sender, assignee, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s assigned someone to %s", repoName, sender, ref)
-		}
-	}
-
-	stream, topic := p.resolveStreamAndTopic(pl)
-	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// handleIssueLabel handles issue_label events.
-func (p *proxy) handleIssueLabel(pl payload) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "issue")
-
-	label := ""
-	if l := getMap(pl, "label"); l != nil {
-		label = getString(l, "name")
-	}
-
-	ref := buildRef(number, title, htmlURL)
-	var msg string
-	if getString(pl, "action") == "label_cleared" {
-		if label != "" {
-			msg = fmt.Sprintf("**[%s]** %s removed label \"%s\" from %s", repoName, sender, label, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s cleared labels on %s", repoName, sender, ref)
-		}
-	} else {
-		if label != "" {
-			msg = fmt.Sprintf("**[%s]** %s added label \"%s\" to %s", repoName, sender, label, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s updated labels on %s", repoName, sender, ref)
-		}
-	}
-
-	stream, topic := p.resolveStreamAndTopic(pl)
-	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// handleIssueMilestone handles issue_milestone events.
-func (p *proxy) handleIssueMilestone(pl payload) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "issue")
+// handleMilestone handles pull_request_milestone and issue_milestone events.
+// entityKey is "pull_request" or "issue".
+func (p *proxy) handleMilestone(pl payload, entityKey string) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
 
 	milestone := ""
 	if m := getMap(pl, "milestone"); m != nil {
@@ -604,18 +524,18 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "pull_request_review_request":
 		handleErr = p.handlePullRequestReviewRequest(pl)
 	case "pull_request_assign":
-		handleErr = p.handlePullRequestAssign(pl)
+		handleErr = p.handleAssign(pl, "pull_request")
 	case "pull_request_label":
-		handleErr = p.handlePullRequestLabel(pl)
+		handleErr = p.handleLabel(pl, "pull_request")
 	case "pull_request_milestone":
-		handleErr = p.handlePullRequestMilestone(pl)
+		handleErr = p.handleMilestone(pl, "pull_request")
 	// Issue metadata events: post compact messages via Zulip bot API
 	case "issue_assign":
-		handleErr = p.handleIssueAssign(pl)
+		handleErr = p.handleAssign(pl, "issue")
 	case "issue_label":
-		handleErr = p.handleIssueLabel(pl)
+		handleErr = p.handleLabel(pl, "issue")
 	case "issue_milestone":
-		handleErr = p.handleIssueMilestone(pl)
+		handleErr = p.handleMilestone(pl, "issue")
 	// All other events: forward to Zulip Gitea webhook (natively supported: push,
 	// create, pull_request, issues, issue_comment, release). Unknown events are
 	// forwarded and dropped if Zulip returns 4xx.
