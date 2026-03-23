@@ -68,7 +68,7 @@ func (p *proxy) validateSignature(body []byte, sigHeader string) bool {
 	}
 	mac := hmac.New(sha256.New, []byte(p.cfg.ForgejoSecret))
 	mac.Write(body)
-	expected := "sha256=" + fmt.Sprintf("%x", mac.Sum(nil))
+	expected := fmt.Sprintf("%x", mac.Sum(nil))
 	return hmac.Equal([]byte(expected), []byte(sigHeader))
 }
 
