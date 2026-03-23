@@ -180,6 +180,36 @@ func TestPullRequestReviewApproved(t *testing.T) {
 	}
 }
 
+// TestPullRequestReviewApproved_NoReviewType verifies that a pull_request_approved
+// event produces APPROVED even when review.type is absent (Forgejo bug #7935).
+func TestPullRequestReviewApproved_NoReviewType(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"pull_request": map[string]any{
+			"number":   float64(3),
+			"title":    "Add feature",
+			"html_url": "https://git.example.com/repo/pulls/3",
+		},
+		"review": map[string]any{
+			// type field absent — simulates Forgejo bug #7935
+			"user": map[string]any{"login": "bob"},
+		},
+		"repository": map[string]any{"full_name": "owner/repo", "name": "repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request_approved", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("response: got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "APPROVED") {
+		t.Errorf("message should contain APPROVED even without review.type, got: %q", msg)
+	}
+}
+
 func TestPullRequestReviewRejected(t *testing.T) {
 	zulipSrv, getMsg := captureZulipAPI(t)
 	webhookURL, _ := captureServer(t)
