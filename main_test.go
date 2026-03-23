@@ -448,12 +448,13 @@ func TestZulip4xxDropped(t *testing.T) {
 }
 
 // --- UI tests ---
+// UI routes live on the dedicated UI server; use p.uiHandler() to exercise them.
 
 func TestUIPageNoAuth(t *testing.T) {
 	p := makeProxy("http://example.com", "http://example.com")
-	req := httptest.NewRequest(http.MethodGet, "/ui", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
-	p.ServeHTTP(rr, req)
+	p.uiHandler().ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("got %d, want 200", rr.Code)
@@ -469,29 +470,30 @@ func TestUIPageNoAuth(t *testing.T) {
 func TestUIPageAuthRequired(t *testing.T) {
 	p := makeProxy("http://example.com", "http://example.com")
 	p.cfg.UIPassword = "secret"
+	ui := p.uiHandler()
 
 	// No credentials → 401
-	req := httptest.NewRequest(http.MethodGet, "/ui", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
-	p.ServeHTTP(rr, req)
+	ui.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("no auth: got %d, want 401", rr.Code)
 	}
 
 	// Wrong password → 401
-	req = httptest.NewRequest(http.MethodGet, "/ui", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	req.SetBasicAuth("admin", "wrong")
 	rr = httptest.NewRecorder()
-	p.ServeHTTP(rr, req)
+	ui.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("wrong pass: got %d, want 401", rr.Code)
 	}
 
 	// Correct password → 200
-	req = httptest.NewRequest(http.MethodGet, "/ui", nil)
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	req.SetBasicAuth("admin", "secret")
 	rr = httptest.NewRecorder()
-	p.ServeHTTP(rr, req)
+	ui.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("correct pass: got %d, want 200", rr.Code)
 	}
@@ -501,11 +503,11 @@ func TestUITest_Success(t *testing.T) {
 	zulipSrv, getMsg := captureZulipAPI(t)
 	p := makeProxy("http://example.com", zulipSrv)
 
-	req := httptest.NewRequest(http.MethodPost, "/ui/test",
+	req := httptest.NewRequest(http.MethodPost, "/test",
 		strings.NewReader("stream=git&topic=test"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
-	p.ServeHTTP(rr, req)
+	p.uiHandler().ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("got %d, want 200", rr.Code)
@@ -517,16 +519,17 @@ func TestUITest_Success(t *testing.T) {
 	if result["ok"] != true {
 		t.Errorf("expected ok=true, got: %v", result)
 	}
-	if !strings.Contains(getMsg(), "test message") {
-		t.Errorf("expected test message sent to Zulip, got: %q", getMsg())
+	// Verify it sent a real PR review event (APPROVED message) rather than a raw test message.
+	if !strings.Contains(getMsg(), "APPROVED") {
+		t.Errorf("expected APPROVED message sent to Zulip, got: %q", getMsg())
 	}
 }
 
 func TestUITest_MethodNotAllowed(t *testing.T) {
 	p := makeProxy("http://example.com", "http://example.com")
-	req := httptest.NewRequest(http.MethodGet, "/ui/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rr := httptest.NewRecorder()
-	p.ServeHTTP(rr, req)
+	p.uiHandler().ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("got %d, want 405", rr.Code)
@@ -541,9 +544,9 @@ func TestUILogs_SnapshotAndSSEHeaders(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/ui/logs", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/logs", nil).WithContext(ctx)
 	rr := httptest.NewRecorder()
-	p.ServeHTTP(rr, req)
+	p.uiHandler().ServeHTTP(rr, req)
 
 	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Errorf("Content-Type: got %q, want text/event-stream", ct)

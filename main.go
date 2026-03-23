@@ -27,6 +27,7 @@ type Config struct {
 	WebhookSecret        string
 	UIPassword           string
 	Port                 string
+	UIPort               string
 }
 
 func loadConfig() Config {
@@ -48,9 +49,13 @@ func loadConfig() Config {
 		WebhookSecret:        os.Getenv("WEBHOOK_SECRET"),
 		UIPassword:           os.Getenv("UI_PASSWORD"),
 		Port:                 os.Getenv("PORT"),
+		UIPort:               os.Getenv("UI_PORT"),
 	}
 	if c.Port == "" {
 		c.Port = "8080"
+	}
+	if c.UIPort == "" {
+		c.UIPort = "3000"
 	}
 	return c
 }
@@ -381,21 +386,6 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Web UI endpoints.
-	if strings.HasPrefix(r.URL.Path, "/ui") {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/ui":
-			p.handleUI(w, r)
-		case r.Method == http.MethodGet && r.URL.Path == "/ui/logs":
-			p.handleUILogs(w, r)
-		case r.URL.Path == "/ui/test":
-			p.handleUITest(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -464,9 +454,20 @@ func main() {
 
 	p := newProxy(cfg)
 	log.SetOutput(newLogWriter(p.rb, p.bc))
-	addr := "0.0.0.0:" + cfg.Port
-	log.Printf("proxy listening on %s", addr)
-	if err := http.ListenAndServe(addr, p); err != nil {
+
+	// Start the UI server on its own port.
+	uiAddr := "0.0.0.0:" + cfg.UIPort
+	go func() {
+		log.Printf("UI listening on %s", uiAddr)
+		if err := http.ListenAndServe(uiAddr, p.uiHandler()); err != nil {
+			log.Fatalf("UI server: %v", err)
+		}
+	}()
+
+	// Start the webhook proxy server.
+	webhookAddr := "0.0.0.0:" + cfg.Port
+	log.Printf("webhook proxy listening on %s", webhookAddr)
+	if err := http.ListenAndServe(webhookAddr, p); err != nil {
 		log.Fatal(err)
 	}
 }

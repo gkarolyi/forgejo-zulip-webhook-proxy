@@ -152,7 +152,7 @@ document.getElementById('testForm').addEventListener('submit', async (e) => {
   res.className = '';
   res.textContent = 'Sending\u2026';
   try {
-    const r = await fetch('/ui/test', {
+    const r = await fetch('/test', {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body: new URLSearchParams(new FormData(e.target)),
@@ -167,7 +167,7 @@ document.getElementById('testForm').addEventListener('submit', async (e) => {
 });
 
 const logDiv = document.getElementById('logs');
-const es = new EventSource('/ui/logs');
+const es = new EventSource('/logs');
 es.onmessage = (e) => {
   logDiv.textContent += e.data + '\n';
   logDiv.scrollTop = logDiv.scrollHeight;
@@ -262,11 +262,49 @@ func (p *proxy) handleUITest(w http.ResponseWriter, r *http.Request) {
 		topic = "test"
 	}
 
+	// Simulate a real pull_request_approved webhook so the full handler path
+	// (including logging) is exercised, not just a raw bot API call.
+	fakePL := payload{
+		"pull_request": payload{
+			"number":   0,
+			"title":    "Webhook proxy self-test",
+			"html_url": "",
+		},
+		"repository": payload{
+			"full_name": "proxy/self-test",
+		},
+		"sender": payload{
+			"login": "webhook-proxy",
+		},
+		"review": payload{
+			"type":    "approved",
+			"content": "Self-test triggered from /ui",
+		},
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	err := p.postToZulipAPI(stream, topic, "**Webhook proxy test message** — connection OK")
+	err := p.handlePullRequestReview(fakePL, "pull_request_approved", stream, topic)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// uiHandler returns an http.Handler for the dedicated UI port.
+// Routes are at the root level (/, /logs, /test, /health).
+func (p *proxy) uiHandler() http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/logs", p.handleUILogs)
+	mux.HandleFunc("/test", p.handleUITest)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Serve the UI page for / and any unknown path.
+		p.handleUI(w, r)
+	})
+
+	return mux
 }

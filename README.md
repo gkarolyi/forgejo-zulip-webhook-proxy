@@ -62,8 +62,9 @@ Set `WEBHOOK_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 | `ZULIP_GITEA_WEBHOOK_URL` | Yes | Zulip Gitea integration URL with `api_key` param (e.g. `https://chat.example.org/api/v1/external/gitea?api_key=XXX`). The site URL and bot API key are derived from this. |
 | `ZULIP_BOT_EMAIL` | Yes | Bot email for posting review/reviewer notifications via Zulip API |
 | `WEBHOOK_SECRET` | No | Shared secret for HMAC signature validation of incoming Forgejo webhooks |
-| `UI_PASSWORD` | No | Password for the `/ui` web interface (Basic auth, any username). No auth if unset. |
-| `PORT` | No | Port to listen on (default: 8080) |
+| `UI_PASSWORD` | No | Password for web UI Basic auth (any username). No auth if unset. |
+| `PORT` | No | Webhook listener port (default: 8080) |
+| `UI_PORT` | No | Web UI listener port (default: 3000) |
 
 ## Development
 
@@ -103,12 +104,14 @@ docker compose up -d
 
 ## Web UI
 
-`GET /ui` serves a single-page interface with:
+The proxy runs a dedicated web UI server on `UI_PORT` (default: 3000). Accessing `http://your-server:3000/` opens a single-page interface with:
 
-- A **test connection** button — sends a dummy message via the Zulip bot API to confirm credentials are working
-- A **live log view** — streams proxy log lines via Server-Sent Events (`GET /ui/logs`), showing the last 200 lines on connect plus new events in real time
+- A **test connection** button — simulates a `pull_request_approved` webhook through the proxy's own handler, confirming both Zulip credentials and end-to-end event processing
+- A **live log view** — streams proxy log lines via Server-Sent Events (`GET /logs`), showing the last 200 lines on connect plus new events in real time
 
-Set `UI_PASSWORD` to require Basic auth (any username, the env var value as password). If unset, `/ui` is open to anyone who can reach the proxy.
+Point Traefik or another reverse proxy at port 3000 for easy access.
+
+Set `UI_PASSWORD` to require Basic auth (any username, the env var value as password). If unset, the UI is open to anyone who can reach the port.
 
 ## Health check
 
