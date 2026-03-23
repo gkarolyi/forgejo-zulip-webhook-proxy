@@ -120,3 +120,5 @@ docker compose up -d
 ## Caveats
 
 Forgejo currently has a bug ([issue #7935](https://codeberg.org/forgejo/forgejo/issues/7935)) where `review.content` is always empty for inline review comments. Review notifications will still post with the PR link; the body text will appear once Forgejo fixes the payload.
+
+<!-- test -->
