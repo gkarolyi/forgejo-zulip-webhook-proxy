@@ -56,6 +56,44 @@ Set `FORGEJO_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 | `FORGEJO_SECRET` | No | Shared secret for HMAC signature validation |
 | `PORT` | No | Port to listen on (default: 8080) |
 
+## Development
+
+### Prerequisites
+
+- Go 1.23+
+
+### Run tests
+
+```bash
+go test ./...
+```
+
+### Build
+
+```bash
+go build -o proxy .
+```
+
+### Run locally
+
+```bash
+ZULIP_GITEA_WEBHOOK_URL="https://..." \
+ZULIP_SITE="https://chat.example.org" \
+ZULIP_BOT_EMAIL="bot@example.org" \
+ZULIP_BOT_API_KEY="your-key" \
+./proxy
+```
+
+### Docker
+
+```bash
+# Build (also runs tests)
+docker build -t forgejo-zulip-webhook-proxy .
+
+# Run
+docker compose up -d
+```
+
 ## Health check
 
 `GET /health` returns `200 ok`. Used by Docker's `HEALTHCHECK` directive.
