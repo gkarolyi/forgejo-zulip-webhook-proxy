@@ -194,8 +194,8 @@ func (p *proxy) forwardToGiteaWebhook(pl payload, eventType, stream, topic strin
 		// Client error: Zulip doesn't support this event type. Log and drop —
 		// retrying will never succeed.
 		respBody, _ := io.ReadAll(resp.Body)
-		log.Printf("warning: Zulip webhook returned %d for %s (unsupported event, dropping): %s",
-			resp.StatusCode, eventType, respBody)
+		log.Printf("dropped event %s: Zulip returned %d (event type not supported by the integration): %s",
+			eventType, resp.StatusCode, respBody)
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
