@@ -135,12 +135,9 @@ func TestPullRequestComment_RemappedToIssueComment(t *testing.T) {
 }
 
 func TestPullRequestReviewApproved(t *testing.T) {
-	// Use a dummy URL for the gitea webhook (should not be called)
 	webhookURL, getLastReq := captureServer(t)
-
-	// Use zulip API server
-	zulipSrv, zulipMsg2 := captureZulipAPI(t)
-	p2 := makeProxy(webhookURL, zulipSrv)
+	zulipSrv, getMsg := captureZulipAPI(t)
+	p := makeProxy(webhookURL, zulipSrv)
 
 	pl := map[string]any{
 		"pull_request": map[string]any{
@@ -159,7 +156,7 @@ func TestPullRequestReviewApproved(t *testing.T) {
 		},
 	}
 
-	rr := postWebhook(t, p2, "pull_request_approved", pl)
+	rr := postWebhook(t, p, "pull_request_approved", pl)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("response: got %d, want 200", rr.Code)
@@ -171,7 +168,7 @@ func TestPullRequestReviewApproved(t *testing.T) {
 		t.Errorf("gitea webhook should not be called for review events")
 	}
 
-	msg := zulipMsg2()
+	msg := getMsg()
 	if !strings.Contains(msg, "APPROVED") {
 		t.Errorf("message should contain APPROVED, got: %q", msg)
 	}
@@ -220,6 +217,116 @@ func TestPullRequestReviewRejected(t *testing.T) {
 	}
 	if !strings.Contains(msg, "Please add error handling") {
 		t.Errorf("message should contain review body, got: %q", msg)
+	}
+}
+
+// TestPullRequestReviewRequested verifies that a pull_request event with
+// action=review_requested triggers the bot API (not the Gitea integration).
+// This is the actual event Forgejo fires when a reviewer is requested.
+func TestPullRequestReviewRequested(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, getLastReq := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "review_requested",
+		"pull_request": map[string]any{
+			"number":   float64(3),
+			"title":    "Add feature",
+			"html_url": "https://git.example.com/repo/pulls/3",
+		},
+		"requested_reviewer": map[string]any{"login": "bob"},
+		"sender":             map[string]any{"login": "alice"},
+		"repository":         map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+
+	// Gitea webhook should NOT be called for review_requested
+	_, body := getLastReq()
+	if len(body) > 0 {
+		t.Errorf("gitea webhook should not be called for review_requested")
+	}
+
+	msg := getMsg()
+	if !strings.Contains(msg, "alice") {
+		t.Errorf("message should contain sender, got: %q", msg)
+	}
+	if !strings.Contains(msg, "bob") {
+		t.Errorf("message should contain requested reviewer, got: %q", msg)
+	}
+	if !strings.Contains(msg, "#3") {
+		t.Errorf("message should reference PR, got: %q", msg)
+	}
+}
+
+// TestPullRequestReviewRequestRemoved verifies that review_request_removed action
+// also triggers the bot API.
+func TestPullRequestReviewRequestRemoved(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "review_request_removed",
+		"pull_request": map[string]any{
+			"number":   float64(3),
+			"title":    "Add feature",
+			"html_url": "https://git.example.com/repo/pulls/3",
+		},
+		"requested_reviewer": map[string]any{"login": "bob"},
+		"sender":             map[string]any{"login": "alice"},
+		"repository":         map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+
+	msg := getMsg()
+	if !strings.Contains(msg, "removed") {
+		t.Errorf("message should contain 'removed', got: %q", msg)
+	}
+	if !strings.Contains(msg, "bob") {
+		t.Errorf("message should contain reviewer name, got: %q", msg)
+	}
+}
+
+// TestPullRequestOtherActionsForwarded verifies that pull_request events with
+// non-review actions (opened, synchronized, assigned, label_updated, milestoned,
+// etc.) are forwarded to the Gitea integration, not the bot API.
+func TestPullRequestOtherActionsForwarded(t *testing.T) {
+	actions := []string{"opened", "closed", "synchronized", "assigned", "label_updated", "milestoned"}
+
+	for _, action := range actions {
+		t.Run(action, func(t *testing.T) {
+			webhookURL, getLastReq := captureServer(t)
+			p := makeProxy(webhookURL, "http://example.com")
+
+			pl := map[string]any{
+				"action": action,
+				"pull_request": map[string]any{
+					"number": float64(1),
+					"title":  "test PR",
+				},
+				"repository": map[string]any{"full_name": "owner/repo"},
+				"sender":     map[string]any{"login": "alice"},
+			}
+
+			rr := postWebhook(t, p, "pull_request", pl)
+			if rr.Code != http.StatusOK {
+				t.Errorf("action=%s: got %d, want 200", action, rr.Code)
+			}
+
+			event, _ := getLastReq()
+			if event != "pull_request" {
+				t.Errorf("action=%s: forwarded event got %q, want %q", action, event, "pull_request")
+			}
+		})
 	}
 }
 
@@ -288,284 +395,6 @@ func TestMethodNotAllowed(t *testing.T) {
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("got %d, want 405", rr.Code)
-	}
-}
-
-func TestPullRequestReviewComment(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"pull_request": map[string]any{
-			"number":   float64(9),
-			"title":    "Add logging",
-			"html_url": "https://git.example.com/repo/pulls/9",
-		},
-		"comment": map[string]any{
-			"body":     "This function needs a timeout",
-			"path":     "main.go",
-			"line":     float64(42),
-			"html_url": "https://git.example.com/repo/pulls/9#discussion_r1",
-			"user":     map[string]any{"login": "gergely"},
-		},
-		"repository": map[string]any{
-			"full_name": "owner/repo",
-			"name":      "repo",
-		},
-	}
-
-	rr := postWebhook(t, p, "pull_request_review_comment", pl)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("response: got %d, want 200", rr.Code)
-	}
-
-	msg := getMsg()
-	if !strings.Contains(msg, "gergely") {
-		t.Errorf("message should contain commenter name, got: %q", msg)
-	}
-	if !strings.Contains(msg, "main.go") {
-		t.Errorf("message should contain file path, got: %q", msg)
-	}
-	if !strings.Contains(msg, "This function needs a timeout") {
-		t.Errorf("message should contain comment body, got: %q", msg)
-	}
-	if !strings.Contains(msg, "#9") {
-		t.Errorf("message should reference PR number, got: %q", msg)
-	}
-}
-
-func TestPullRequestSync(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "synchronized",
-		"pull_request": map[string]any{
-			"number":   float64(12),
-			"title":    "My feature",
-			"html_url": "https://git.example.com/repo/pulls/12",
-		},
-		"sender":     map[string]any{"login": "alice"},
-		"repository": map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "pull_request_sync", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "alice") {
-		t.Errorf("message should contain sender, got: %q", msg)
-	}
-	if !strings.Contains(msg, "synchronized") {
-		t.Errorf("message should contain 'synchronized', got: %q", msg)
-	}
-	if !strings.Contains(msg, "#12") {
-		t.Errorf("message should reference PR, got: %q", msg)
-	}
-}
-
-func TestPullRequestReviewRequest(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "review_requested",
-		"pull_request": map[string]any{
-			"number":   float64(3),
-			"title":    "Add feature",
-			"html_url": "https://git.example.com/repo/pulls/3",
-		},
-		"requested_reviewer": map[string]any{"login": "bob"},
-		"sender":             map[string]any{"login": "alice"},
-		"repository":         map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "pull_request_review_request", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "alice") {
-		t.Errorf("message should contain sender, got: %q", msg)
-	}
-	if !strings.Contains(msg, "bob") {
-		t.Errorf("message should contain requested reviewer, got: %q", msg)
-	}
-	if !strings.Contains(msg, "#3") {
-		t.Errorf("message should reference PR, got: %q", msg)
-	}
-}
-
-func TestPullRequestAssign(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "assigned",
-		"pull_request": map[string]any{
-			"number":   float64(7),
-			"title":    "Refactor",
-			"html_url": "https://git.example.com/repo/pulls/7",
-		},
-		"assignee":   map[string]any{"login": "carol"},
-		"sender":     map[string]any{"login": "alice"},
-		"repository": map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "pull_request_assign", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "carol") {
-		t.Errorf("message should contain assignee, got: %q", msg)
-	}
-	if !strings.Contains(msg, "assigned") {
-		t.Errorf("message should contain 'assigned', got: %q", msg)
-	}
-}
-
-func TestPullRequestLabel(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "label_updated",
-		"pull_request": map[string]any{
-			"number":   float64(2),
-			"title":    "Fix bug",
-			"html_url": "https://git.example.com/repo/pulls/2",
-		},
-		"label":      map[string]any{"name": "bug"},
-		"sender":     map[string]any{"login": "alice"},
-		"repository": map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "pull_request_label", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "bug") {
-		t.Errorf("message should contain label name, got: %q", msg)
-	}
-}
-
-func TestPullRequestMilestone(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "milestoned",
-		"pull_request": map[string]any{
-			"number":   float64(4),
-			"title":    "Ship it",
-			"html_url": "https://git.example.com/repo/pulls/4",
-		},
-		"milestone":  map[string]any{"title": "v1.0"},
-		"sender":     map[string]any{"login": "alice"},
-		"repository": map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "pull_request_milestone", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "v1.0") {
-		t.Errorf("message should contain milestone name, got: %q", msg)
-	}
-}
-
-func TestIssueAssign(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "assigned",
-		"issue": map[string]any{
-			"number":   float64(10),
-			"title":    "Investigate crash",
-			"html_url": "https://git.example.com/repo/issues/10",
-		},
-		"assignee":   map[string]any{"login": "dave"},
-		"sender":     map[string]any{"login": "alice"},
-		"repository": map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "issue_assign", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "dave") {
-		t.Errorf("message should contain assignee, got: %q", msg)
-	}
-	if !strings.Contains(msg, "#10") {
-		t.Errorf("message should reference issue, got: %q", msg)
-	}
-}
-
-func TestIssueLabel(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "label_updated",
-		"issue": map[string]any{
-			"number":   float64(11),
-			"title":    "Perf issue",
-			"html_url": "https://git.example.com/repo/issues/11",
-		},
-		"label":      map[string]any{"name": "enhancement"},
-		"sender":     map[string]any{"login": "alice"},
-		"repository": map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "issue_label", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "enhancement") {
-		t.Errorf("message should contain label name, got: %q", msg)
-	}
-}
-
-func TestIssueMilestone(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	webhookURL, _ := captureServer(t)
-	p := makeProxy(webhookURL, zulipSrv)
-
-	pl := map[string]any{
-		"action": "milestoned",
-		"issue": map[string]any{
-			"number":   float64(15),
-			"title":    "Track progress",
-			"html_url": "https://git.example.com/repo/issues/15",
-		},
-		"milestone":  map[string]any{"title": "v2.0"},
-		"sender":     map[string]any{"login": "alice"},
-		"repository": map[string]any{"full_name": "owner/repo"},
-	}
-
-	rr := postWebhook(t, p, "issue_milestone", pl)
-	if rr.Code != http.StatusOK {
-		t.Errorf("got %d, want 200", rr.Code)
-	}
-	msg := getMsg()
-	if !strings.Contains(msg, "v2.0") {
-		t.Errorf("message should contain milestone name, got: %q", msg)
 	}
 }
 

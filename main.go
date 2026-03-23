@@ -227,17 +227,45 @@ func buildRef(number any, title, htmlURL string) string {
 	return ref
 }
 
-// --- PR metadata event handlers ---
+// --- event handlers ---
 
-// handlePullRequestSync handles pull_request_sync events (new commits pushed to a PR branch).
-func (p *proxy) handlePullRequestSync(pl payload, stream, topic string) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
-	msg := fmt.Sprintf("**[%s]** %s synchronized %s", repoName, sender, buildRef(number, title, htmlURL))
-	return p.postToZulipAPI(stream, topic, msg)
+// handlePullRequestComment remaps pull_request_comment → issue_comment so
+// Zulip's Gitea integration can handle it. Zulip checks is_pull=true to know
+// the comment is on a PR, and reads issue.{number,title} for context.
+//
+// Forgejo fires pull_request_comment (X-Gitea-Event) for inline review comments
+// (HookEventPullRequestReviewComment). Regular PR thread comments arrive as
+// issue_comment and are forwarded directly by the default case.
+func (p *proxy) handlePullRequestComment(pl payload, stream, topic string) error {
+	pr := getMap(pl, "pull_request")
+	if pr == nil {
+		pr = payload{}
+	}
+	transformed := payload{
+		"action":  getStringOr(pl, "action", "created"),
+		"is_pull": true,
+		"issue": payload{
+			"number":   firstNonNil(pr["number"], pl["number"], "?"),
+			"title":    getString(pr, "title"),
+			"body":     getString(pr, "body"),
+			"state":    getString(pr, "state"),
+			"user":     getMap(pr, "user"),
+			"html_url": getString(pr, "html_url"),
+		},
+		"comment":    getMap(pl, "comment"),
+		"repository": getMap(pl, "repository"),
+		"sender":     getMap(pl, "sender"),
+	}
+	return p.forwardToGiteaWebhook(transformed, "issue_comment", stream, topic)
 }
 
-// handlePullRequestReviewRequest handles pull_request_review_request events
-// (reviewer added or removed on a PR).
+// handlePullRequestReviewRequest handles pull_request events where
+// action == "review_requested" or "review_request_removed".
+//
+// Forgejo sends these as X-Gitea-Event: pull_request with the action field set —
+// there is no separate pull_request_review_request event type.
+// The Gitea integration does not produce a notification for these actions,
+// so we post a compact message via the Zulip bot API.
 func (p *proxy) handlePullRequestReviewRequest(pl payload, stream, topic string) error {
 	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
 
@@ -265,162 +293,6 @@ func (p *proxy) handlePullRequestReviewRequest(pl payload, stream, topic string)
 	}
 
 	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// handleAssign handles pull_request_assign and issue_assign events.
-// entityKey is "pull_request" or "issue".
-func (p *proxy) handleAssign(pl payload, entityKey, stream, topic string) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
-
-	assignee := ""
-	if a := getMap(pl, "assignee"); a != nil {
-		assignee = getString(a, "login")
-	}
-
-	ref := buildRef(number, title, htmlURL)
-	var msg string
-	if getString(pl, "action") == "unassigned" {
-		if assignee != "" {
-			msg = fmt.Sprintf("**[%s]** %s unassigned %s from %s", repoName, sender, assignee, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s unassigned someone from %s", repoName, sender, ref)
-		}
-	} else {
-		if assignee != "" {
-			msg = fmt.Sprintf("**[%s]** %s assigned %s to %s", repoName, sender, assignee, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s assigned someone to %s", repoName, sender, ref)
-		}
-	}
-
-	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// handleLabel handles pull_request_label and issue_label events.
-// entityKey is "pull_request" or "issue".
-func (p *proxy) handleLabel(pl payload, entityKey, stream, topic string) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
-
-	label := ""
-	if l := getMap(pl, "label"); l != nil {
-		label = getString(l, "name")
-	}
-
-	ref := buildRef(number, title, htmlURL)
-	var msg string
-	if getString(pl, "action") == "label_cleared" {
-		if label != "" {
-			msg = fmt.Sprintf("**[%s]** %s removed label \"%s\" from %s", repoName, sender, label, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s cleared labels on %s", repoName, sender, ref)
-		}
-	} else {
-		if label != "" {
-			msg = fmt.Sprintf("**[%s]** %s added label \"%s\" to %s", repoName, sender, label, ref)
-		} else {
-			msg = fmt.Sprintf("**[%s]** %s updated labels on %s", repoName, sender, ref)
-		}
-	}
-
-	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// handleMilestone handles pull_request_milestone and issue_milestone events.
-// entityKey is "pull_request" or "issue".
-func (p *proxy) handleMilestone(pl payload, entityKey, stream, topic string) error {
-	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
-
-	milestone := ""
-	if m := getMap(pl, "milestone"); m != nil {
-		milestone = getString(m, "title")
-	}
-
-	ref := buildRef(number, title, htmlURL)
-	var msg string
-	if getString(pl, "action") == "demilestoned" {
-		msg = fmt.Sprintf("**[%s]** %s removed milestone from %s", repoName, sender, ref)
-	} else if milestone != "" {
-		msg = fmt.Sprintf("**[%s]** %s set milestone \"%s\" on %s", repoName, sender, milestone, ref)
-	} else {
-		msg = fmt.Sprintf("**[%s]** %s updated milestone on %s", repoName, sender, ref)
-	}
-
-	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// handlePullRequestReviewComment handles inline code review comments
-// (pull_request_review_comment events). These are line-level comments left during
-// a formal review on the "Files changed" tab. Zulip has no handler for this event
-// type, so we post a formatted message via the bot API.
-func (p *proxy) handlePullRequestReviewComment(pl payload, stream, topic string) error {
-	number, title, prURL, repoName, _ := extractEntityFields(pl, "pull_request")
-
-	comment := getMap(pl, "comment")
-	if comment == nil {
-		comment = payload{}
-	}
-
-	commenter := ""
-	if user := getMap(comment, "user"); user != nil {
-		commenter = getString(user, "login")
-	}
-	if commenter == "" {
-		if sender := getMap(pl, "sender"); sender != nil {
-			commenter = getString(sender, "login")
-		}
-	}
-	if commenter == "" {
-		commenter = "someone"
-	}
-
-	// Include file path and line number if present.
-	location := ""
-	if path := getString(comment, "path"); path != "" {
-		location = fmt.Sprintf(" on `%s`", path)
-		if line, ok := comment["line"]; ok && line != nil {
-			location = fmt.Sprintf(" on `%s:%v`", path, line)
-		}
-	}
-
-	commentURL := getString(comment, "html_url")
-	commentRef := "commented"
-	if commentURL != "" {
-		commentRef = fmt.Sprintf("[commented](%s)", commentURL)
-	}
-
-	msg := fmt.Sprintf("**[%s]** %s %s%s in %s", repoName, commenter, commentRef, location, buildRef(number, title, prURL))
-
-	if body := strings.TrimSpace(getString(comment, "body")); body != "" {
-		msg += "\n\n> " + strings.ReplaceAll(body, "\n", "\n> ")
-	}
-
-	return p.postToZulipAPI(stream, topic, msg)
-}
-
-// handlePullRequestComment remaps pull_request_comment → issue_comment so
-// Zulip's Gitea integration can handle it. Zulip checks is_pull=true to know
-// the comment is on a PR, and reads issue.{number,title} for context.
-func (p *proxy) handlePullRequestComment(pl payload, stream, topic string) error {
-	pr := getMap(pl, "pull_request")
-	if pr == nil {
-		pr = payload{}
-	}
-	transformed := payload{
-		"action":  getStringOr(pl, "action", "created"),
-		"is_pull": true,
-		"issue": payload{
-			"number":   firstNonNil(pr["number"], pl["number"], "?"),
-			"title":    getString(pr, "title"),
-			"body":     getString(pr, "body"),
-			"state":    getString(pr, "state"),
-			"user":     getMap(pr, "user"),
-			"html_url": getString(pr, "html_url"),
-		},
-		"comment":    getMap(pl, "comment"),
-		"repository": getMap(pl, "repository"),
-		"sender":     getMap(pl, "sender"),
-	}
-	return p.forwardToGiteaWebhook(transformed, "issue_comment", stream, topic)
 }
 
 // handlePullRequestReview handles pull_request_approved and pull_request_rejected
@@ -470,6 +342,20 @@ func (p *proxy) handlePullRequestReview(pl payload, eventType, stream, topic str
 }
 
 // ServeHTTP handles all incoming webhook requests.
+//
+// Forgejo X-Gitea-Event values and how we handle them:
+//
+//	pull_request_comment  → remap to issue_comment for Gitea integration
+//	                        (fired for inline review comments)
+//	pull_request_approved → bot API: APPROVED message
+//	pull_request_rejected → bot API: REJECTED message
+//	pull_request          → bot API for review_requested/review_request_removed;
+//	                        Gitea integration for all other actions (opened, closed,
+//	                        synchronized, assigned, label_updated, milestoned, etc.)
+//	issues, issue_comment → Gitea integration (opened, closed, assigned, label_updated,
+//	                        milestoned, and all comments)
+//	push, create, release → Gitea integration
+//	everything else       → Gitea integration (dropped with warning if unsupported)
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Health check endpoint.
 	if r.Method == http.MethodGet && r.URL.Path == "/health" {
@@ -506,36 +392,24 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var handleErr error
 	switch event {
-	// PR comment: remap to issue_comment for Zulip's Gitea integration
+	// Inline PR review comment: remap to issue_comment for Zulip's Gitea integration.
 	case "pull_request_comment":
 		handleErr = p.handlePullRequestComment(pl, stream, topic)
-	// PR review (approve/reject): post via Zulip bot API
+	// PR review (approve/reject): post via Zulip bot API.
 	case "pull_request_approved", "pull_request_rejected":
 		handleErr = p.handlePullRequestReview(pl, event, stream, topic)
-	// PR inline review comment: post via Zulip bot API
-	case "pull_request_review_comment":
-		handleErr = p.handlePullRequestReviewComment(pl, stream, topic)
-	// PR metadata events: post compact messages via Zulip bot API
-	case "pull_request_sync":
-		handleErr = p.handlePullRequestSync(pl, stream, topic)
-	case "pull_request_review_request":
-		handleErr = p.handlePullRequestReviewRequest(pl, stream, topic)
-	case "pull_request_assign":
-		handleErr = p.handleAssign(pl, "pull_request", stream, topic)
-	case "pull_request_label":
-		handleErr = p.handleLabel(pl, "pull_request", stream, topic)
-	case "pull_request_milestone":
-		handleErr = p.handleMilestone(pl, "pull_request", stream, topic)
-	// Issue metadata events: post compact messages via Zulip bot API
-	case "issue_assign":
-		handleErr = p.handleAssign(pl, "issue", stream, topic)
-	case "issue_label":
-		handleErr = p.handleLabel(pl, "issue", stream, topic)
-	case "issue_milestone":
-		handleErr = p.handleMilestone(pl, "issue", stream, topic)
-	// All other events: forward to Zulip Gitea webhook (natively supported: push,
-	// create, pull_request, issues, issue_comment, release). Unknown events are
-	// forwarded and dropped if Zulip returns 4xx.
+	// pull_request: review_requested/review_request_removed use the bot API;
+	// all other actions (opened, closed, synchronized, assigned, label_updated,
+	// milestoned, etc.) are handled natively by the Gitea integration.
+	case "pull_request":
+		action := getString(pl, "action")
+		if action == "review_requested" || action == "review_request_removed" {
+			handleErr = p.handlePullRequestReviewRequest(pl, stream, topic)
+		} else {
+			handleErr = p.forwardToGiteaWebhook(pl, event, stream, topic)
+		}
+	// All other events (push, create, issues, issue_comment, release, etc.):
+	// forward to Zulip Gitea webhook. Unknown events are dropped if Zulip returns 4xx.
 	default:
 		handleErr = p.forwardToGiteaWebhook(pl, event, stream, topic)
 	}
