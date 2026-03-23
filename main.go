@@ -423,7 +423,7 @@ func (p *proxy) handlePullRequestComment(pl payload, stream, topic string) error
 	return p.forwardToGiteaWebhook(transformed, "issue_comment", stream, topic)
 }
 
-// handlePullRequestReview handles pull_request_review and pull_request_review_rejected
+// handlePullRequestReview handles pull_request_approved and pull_request_rejected
 // events by posting a formatted APPROVED/REJECTED message to Zulip via the bot API.
 //
 // Note: Forgejo currently has a bug where review.content is always empty for
@@ -454,7 +454,7 @@ func (p *proxy) handlePullRequestReview(pl payload, eventType, stream, topic str
 	prefix := "REVIEWED"
 	reviewType := getString(review, "type")
 	switch {
-	case eventType == "pull_request_review_rejected" || reviewType == "request_changes":
+	case eventType == "pull_request_rejected" || reviewType == "request_changes":
 		prefix = "REJECTED"
 	case reviewType == "approved":
 		prefix = "APPROVED"
@@ -510,7 +510,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "pull_request_comment":
 		handleErr = p.handlePullRequestComment(pl, stream, topic)
 	// PR review (approve/reject): post via Zulip bot API
-	case "pull_request_review", "pull_request_review_rejected":
+	case "pull_request_approved", "pull_request_rejected":
 		handleErr = p.handlePullRequestReview(pl, event, stream, topic)
 	// PR inline review comment: post via Zulip bot API
 	case "pull_request_review_comment":
