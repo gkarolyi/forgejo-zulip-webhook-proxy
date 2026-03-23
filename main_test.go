@@ -159,7 +159,7 @@ func TestPullRequestReviewApproved(t *testing.T) {
 		},
 	}
 
-	rr := postWebhook(t, p2, "pull_request_review", pl)
+	rr := postWebhook(t, p2, "pull_request_approved", pl)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("response: got %d, want 200", rr.Code)
@@ -205,7 +205,7 @@ func TestPullRequestReviewRejected(t *testing.T) {
 		},
 	}
 
-	rr := postWebhook(t, p, "pull_request_review_rejected", pl)
+	rr := postWebhook(t, p, "pull_request_rejected", pl)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("response: got %d, want 200", rr.Code)
