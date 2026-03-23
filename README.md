@@ -18,7 +18,7 @@ This proxy sits between Forgejo and Zulip and handles all of them.
 |---|---|
 | `pull_request_comment` | Remaps to `issue_comment` format, forwards to Zulip Gitea webhook |
 | `pull_request_approved` | Posts `APPROVED: reviewer on #N title` via Zulip bot API |
-| `pull_request_rejected` | Posts `REJECTED: reviewer on #N title` via Zulip bot API |
+| `pull_request_rejected` | Posts `REQUESTED CHANGES: reviewer on #N title` via Zulip bot API |
 | `pull_request` action=`review_requested` | Posts `user requested review from X on #N title` via Zulip bot API |
 | `pull_request` (all other actions) | Forwarded as-is to Zulip Gitea webhook |
 | `push`, `create`, `issues`, `issue_comment`, `release` | Forwarded as-is to Zulip Gitea webhook |

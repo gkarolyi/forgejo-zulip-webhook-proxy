@@ -241,8 +241,8 @@ func TestPullRequestReviewRejected(t *testing.T) {
 	}
 
 	msg := getMsg()
-	if !strings.Contains(msg, "REJECTED") {
-		t.Errorf("message should contain REJECTED, got: %q", msg)
+	if !strings.Contains(msg, "REQUESTED CHANGES") {
+		t.Errorf("message should contain REQUESTED CHANGES, got: %q", msg)
 	}
 	if !strings.Contains(msg, "carol") {
 		t.Errorf("message should contain reviewer name, got: %q", msg)
