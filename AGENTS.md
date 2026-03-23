@@ -52,6 +52,8 @@ curl http://localhost:8080/health
 - `pull_request_review` / `pull_request_review_rejected` must post via the Zulip bot API with APPROVED/REJECTED prefix
 - `pull_request_review_comment` must post via the bot API with `file:line` context
 - PR and issue metadata events (`*_assign`, `*_label`, `*_milestone`) share generic handlers — pass `"pull_request"` or `"issue"` as `entityKey`
+- Stream and topic are resolved from the incoming webhook URL's query params (`?stream=X&topic=Y`), not from env vars. Topic falls back to `repository.name` from the payload; stream falls back to `"git"`. `ZULIP_STREAM` and `ZULIP_TOPIC` env vars do not exist.
+- `forwardToGiteaWebhook` injects the resolved stream and topic into `ZULIP_GITEA_WEBHOOK_URL` before forwarding — the env var should only contain the `api_key` param, no `stream`/`topic`
 - Any Zulip **5xx** response must return HTTP 500 to Forgejo (triggers retry)
 - Any Zulip **4xx** response must return HTTP 200 to Forgejo (event is unsupported; retrying will never succeed)
 - `GET /health` must always return 200

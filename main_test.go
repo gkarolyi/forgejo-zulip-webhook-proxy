@@ -16,20 +16,19 @@ func makeProxy(giteaWebhookURL, zulipSite string) *proxy {
 		ZulipSite:            zulipSite,
 		ZulipBotEmail:        "bot@example.com",
 		ZulipBotAPIKey:       "test-key",
-		ZulipStream:          "git",
-		ZulipTopic:           "test-repo",
 		Port:                 "8080",
 	})
 }
 
 // postWebhook sends a webhook request to the proxy and returns the response.
+// Stream and topic are passed via URL query params, as they would be in production.
 func postWebhook(t *testing.T, p *proxy, event string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshalling payload: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(b)))
+	req := httptest.NewRequest(http.MethodPost, "/?stream=git&topic=test-repo", strings.NewReader(string(b)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Gitea-Event", event)
 

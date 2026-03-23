@@ -22,8 +22,6 @@ type Config struct {
 	ZulipSite            string
 	ZulipBotEmail        string
 	ZulipBotAPIKey       string
-	ZulipStream          string
-	ZulipTopic           string
 	ForgejoSecret        string
 	Port                 string
 }
@@ -34,8 +32,6 @@ func loadConfig() Config {
 		ZulipSite:            strings.TrimRight(os.Getenv("ZULIP_SITE"), "/"),
 		ZulipBotEmail:        os.Getenv("ZULIP_BOT_EMAIL"),
 		ZulipBotAPIKey:       os.Getenv("ZULIP_BOT_API_KEY"),
-		ZulipStream:          os.Getenv("ZULIP_STREAM"),
-		ZulipTopic:           os.Getenv("ZULIP_TOPIC"),
 		ForgejoSecret:        os.Getenv("FORGEJO_SECRET"),
 		Port:                 os.Getenv("PORT"),
 	}
@@ -76,21 +72,17 @@ func (p *proxy) validateSignature(body []byte, sigHeader string) bool {
 	return hmac.Equal([]byte(expected), []byte(sigHeader))
 }
 
-// resolveStreamAndTopic determines the Zulip stream and topic for a payload.
-// Falls back to the stream embedded in the webhook URL, then "git".
-// Topic falls back to the repository name from the payload.
-func (p *proxy) resolveStreamAndTopic(pl payload) (stream, topic string) {
-	stream = p.cfg.ZulipStream
-	if stream == "" && p.cfg.ZulipGiteaWebhookURL != "" {
-		if u, err := url.Parse(p.cfg.ZulipGiteaWebhookURL); err == nil {
-			stream = u.Query().Get("stream")
-		}
-	}
+// resolveStreamAndTopic extracts stream and topic from the incoming request's
+// query parameters. Topic falls back to the repository name in the payload.
+// Stream falls back to "git". Both can be overridden per-repo by setting
+// ?stream=X&topic=Y on the webhook URL registered in Forgejo.
+func resolveStreamAndTopic(pl payload, r *http.Request) (stream, topic string) {
+	stream = r.URL.Query().Get("stream")
 	if stream == "" {
 		stream = "git"
 	}
 
-	topic = p.cfg.ZulipTopic
+	topic = r.URL.Query().Get("topic")
 	if topic == "" {
 		if repo := getMap(pl, "repository"); repo != nil {
 			topic = getString(repo, "name")
@@ -138,21 +130,31 @@ func (p *proxy) postToZulipAPI(stream, topic, content string) error {
 	return nil
 }
 
-// forwardToGiteaWebhook forwards a payload to the Zulip Gitea integration endpoint.
+// forwardToGiteaWebhook forwards a payload to the Zulip Gitea integration endpoint,
+// injecting stream and topic derived from the incoming webhook URL's query params.
 // A 4xx response from Zulip means the event type is not supported by the integration;
 // we log a warning and return nil so Forgejo does not retry (retrying will never succeed).
 // A 5xx response is treated as a transient error and returned so Forgejo will retry.
-func (p *proxy) forwardToGiteaWebhook(pl payload, eventType string) error {
+func (p *proxy) forwardToGiteaWebhook(pl payload, eventType, stream, topic string) error {
 	if p.cfg.ZulipGiteaWebhookURL == "" {
 		return fmt.Errorf("ZULIP_GITEA_WEBHOOK_URL not configured")
 	}
+
+	targetURL, err := url.Parse(p.cfg.ZulipGiteaWebhookURL)
+	if err != nil {
+		return fmt.Errorf("parsing ZULIP_GITEA_WEBHOOK_URL: %w", err)
+	}
+	q := targetURL.Query()
+	q.Set("stream", stream)
+	q.Set("topic", topic)
+	targetURL.RawQuery = q.Encode()
 
 	body, err := json.Marshal(pl)
 	if err != nil {
 		return fmt.Errorf("marshalling payload: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, p.cfg.ZulipGiteaWebhookURL, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, targetURL.String(), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("building request: %w", err)
 	}
@@ -228,16 +230,15 @@ func buildRef(number any, title, htmlURL string) string {
 // --- PR metadata event handlers ---
 
 // handlePullRequestSync handles pull_request_sync events (new commits pushed to a PR branch).
-func (p *proxy) handlePullRequestSync(pl payload) error {
+func (p *proxy) handlePullRequestSync(pl payload, stream, topic string) error {
 	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
 	msg := fmt.Sprintf("**[%s]** %s synchronized %s", repoName, sender, buildRef(number, title, htmlURL))
-	stream, topic := p.resolveStreamAndTopic(pl)
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
 // handlePullRequestReviewRequest handles pull_request_review_request events
 // (reviewer added or removed on a PR).
-func (p *proxy) handlePullRequestReviewRequest(pl payload) error {
+func (p *proxy) handlePullRequestReviewRequest(pl payload, stream, topic string) error {
 	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
 
 	reviewer := ""
@@ -263,13 +264,12 @@ func (p *proxy) handlePullRequestReviewRequest(pl payload) error {
 		}
 	}
 
-	stream, topic := p.resolveStreamAndTopic(pl)
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
 // handleAssign handles pull_request_assign and issue_assign events.
 // entityKey is "pull_request" or "issue".
-func (p *proxy) handleAssign(pl payload, entityKey string) error {
+func (p *proxy) handleAssign(pl payload, entityKey, stream, topic string) error {
 	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
 
 	assignee := ""
@@ -293,13 +293,12 @@ func (p *proxy) handleAssign(pl payload, entityKey string) error {
 		}
 	}
 
-	stream, topic := p.resolveStreamAndTopic(pl)
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
 // handleLabel handles pull_request_label and issue_label events.
 // entityKey is "pull_request" or "issue".
-func (p *proxy) handleLabel(pl payload, entityKey string) error {
+func (p *proxy) handleLabel(pl payload, entityKey, stream, topic string) error {
 	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
 
 	label := ""
@@ -323,13 +322,12 @@ func (p *proxy) handleLabel(pl payload, entityKey string) error {
 		}
 	}
 
-	stream, topic := p.resolveStreamAndTopic(pl)
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
 // handleMilestone handles pull_request_milestone and issue_milestone events.
 // entityKey is "pull_request" or "issue".
-func (p *proxy) handleMilestone(pl payload, entityKey string) error {
+func (p *proxy) handleMilestone(pl payload, entityKey, stream, topic string) error {
 	number, title, htmlURL, repoName, sender := extractEntityFields(pl, entityKey)
 
 	milestone := ""
@@ -347,7 +345,6 @@ func (p *proxy) handleMilestone(pl payload, entityKey string) error {
 		msg = fmt.Sprintf("**[%s]** %s updated milestone on %s", repoName, sender, ref)
 	}
 
-	stream, topic := p.resolveStreamAndTopic(pl)
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
@@ -355,7 +352,7 @@ func (p *proxy) handleMilestone(pl payload, entityKey string) error {
 // (pull_request_review_comment events). These are line-level comments left during
 // a formal review on the "Files changed" tab. Zulip has no handler for this event
 // type, so we post a formatted message via the bot API.
-func (p *proxy) handlePullRequestReviewComment(pl payload) error {
+func (p *proxy) handlePullRequestReviewComment(pl payload, stream, topic string) error {
 	number, title, prURL, repoName, _ := extractEntityFields(pl, "pull_request")
 
 	comment := getMap(pl, "comment")
@@ -397,14 +394,13 @@ func (p *proxy) handlePullRequestReviewComment(pl payload) error {
 		msg += "\n\n> " + strings.ReplaceAll(body, "\n", "\n> ")
 	}
 
-	stream, topic := p.resolveStreamAndTopic(pl)
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
 // handlePullRequestComment remaps pull_request_comment → issue_comment so
 // Zulip's Gitea integration can handle it. Zulip checks is_pull=true to know
 // the comment is on a PR, and reads issue.{number,title} for context.
-func (p *proxy) handlePullRequestComment(pl payload) error {
+func (p *proxy) handlePullRequestComment(pl payload, stream, topic string) error {
 	pr := getMap(pl, "pull_request")
 	if pr == nil {
 		pr = payload{}
@@ -424,7 +420,7 @@ func (p *proxy) handlePullRequestComment(pl payload) error {
 		"repository": getMap(pl, "repository"),
 		"sender":     getMap(pl, "sender"),
 	}
-	return p.forwardToGiteaWebhook(transformed, "issue_comment")
+	return p.forwardToGiteaWebhook(transformed, "issue_comment", stream, topic)
 }
 
 // handlePullRequestReview handles pull_request_review and pull_request_review_rejected
@@ -433,7 +429,7 @@ func (p *proxy) handlePullRequestComment(pl payload) error {
 // Note: Forgejo currently has a bug where review.content is always empty for
 // inline review comments (issue #7935). Messages will still post with the PR link;
 // the body will appear once Forgejo fixes the payload.
-func (p *proxy) handlePullRequestReview(pl payload, eventType string) error {
+func (p *proxy) handlePullRequestReview(pl payload, eventType, stream, topic string) error {
 	number, title, prURL, repoName, _ := extractEntityFields(pl, "pull_request")
 
 	review := getMap(pl, "review")
@@ -470,7 +466,6 @@ func (p *proxy) handlePullRequestReview(pl payload, eventType string) error {
 		msg += "\n\n> " + body
 	}
 
-	stream, topic := p.resolveStreamAndTopic(pl)
 	return p.postToZulipAPI(stream, topic, msg)
 }
 
@@ -507,40 +502,42 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	stream, topic := resolveStreamAndTopic(pl, r)
+
 	var handleErr error
 	switch event {
 	// PR comment: remap to issue_comment for Zulip's Gitea integration
 	case "pull_request_comment":
-		handleErr = p.handlePullRequestComment(pl)
+		handleErr = p.handlePullRequestComment(pl, stream, topic)
 	// PR review (approve/reject): post via Zulip bot API
 	case "pull_request_review", "pull_request_review_rejected":
-		handleErr = p.handlePullRequestReview(pl, event)
+		handleErr = p.handlePullRequestReview(pl, event, stream, topic)
 	// PR inline review comment: post via Zulip bot API
 	case "pull_request_review_comment":
-		handleErr = p.handlePullRequestReviewComment(pl)
+		handleErr = p.handlePullRequestReviewComment(pl, stream, topic)
 	// PR metadata events: post compact messages via Zulip bot API
 	case "pull_request_sync":
-		handleErr = p.handlePullRequestSync(pl)
+		handleErr = p.handlePullRequestSync(pl, stream, topic)
 	case "pull_request_review_request":
-		handleErr = p.handlePullRequestReviewRequest(pl)
+		handleErr = p.handlePullRequestReviewRequest(pl, stream, topic)
 	case "pull_request_assign":
-		handleErr = p.handleAssign(pl, "pull_request")
+		handleErr = p.handleAssign(pl, "pull_request", stream, topic)
 	case "pull_request_label":
-		handleErr = p.handleLabel(pl, "pull_request")
+		handleErr = p.handleLabel(pl, "pull_request", stream, topic)
 	case "pull_request_milestone":
-		handleErr = p.handleMilestone(pl, "pull_request")
+		handleErr = p.handleMilestone(pl, "pull_request", stream, topic)
 	// Issue metadata events: post compact messages via Zulip bot API
 	case "issue_assign":
-		handleErr = p.handleAssign(pl, "issue")
+		handleErr = p.handleAssign(pl, "issue", stream, topic)
 	case "issue_label":
-		handleErr = p.handleLabel(pl, "issue")
+		handleErr = p.handleLabel(pl, "issue", stream, topic)
 	case "issue_milestone":
-		handleErr = p.handleMilestone(pl, "issue")
+		handleErr = p.handleMilestone(pl, "issue", stream, topic)
 	// All other events: forward to Zulip Gitea webhook (natively supported: push,
 	// create, pull_request, issues, issue_comment, release). Unknown events are
 	// forwarded and dropped if Zulip returns 4xx.
 	default:
-		handleErr = p.forwardToGiteaWebhook(pl, event)
+		handleErr = p.forwardToGiteaWebhook(pl, event, stream, topic)
 	}
 
 	if handleErr != nil {
