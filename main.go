@@ -16,23 +16,35 @@ import (
 	"time"
 )
 
-// Config holds all runtime configuration from environment variables.
+// Config holds all runtime configuration.
+// ZulipSite and ZulipBotAPIKey are derived from ZulipGiteaWebhookURL at startup
+// and are not set from environment variables directly.
 type Config struct {
 	ZulipGiteaWebhookURL string
-	ZulipSite            string
+	ZulipSite            string // derived: scheme+host of ZulipGiteaWebhookURL
 	ZulipBotEmail        string
-	ZulipBotAPIKey       string
-	ForgejoSecret        string
+	ZulipBotAPIKey       string // derived: api_key param of ZulipGiteaWebhookURL
+	WebhookSecret        string
 	Port                 string
 }
 
 func loadConfig() Config {
+	webhookURL := os.Getenv("ZULIP_GITEA_WEBHOOK_URL")
+
+	// Derive Zulip site and bot API key from the webhook URL so the operator
+	// only needs to configure one Zulip-related URL.
+	var zulipSite, zulipBotAPIKey string
+	if parsed, err := url.Parse(webhookURL); err == nil && parsed.Host != "" {
+		zulipSite = parsed.Scheme + "://" + parsed.Host
+		zulipBotAPIKey = parsed.Query().Get("api_key")
+	}
+
 	c := Config{
-		ZulipGiteaWebhookURL: os.Getenv("ZULIP_GITEA_WEBHOOK_URL"),
-		ZulipSite:            strings.TrimRight(os.Getenv("ZULIP_SITE"), "/"),
+		ZulipGiteaWebhookURL: webhookURL,
+		ZulipSite:            zulipSite,
 		ZulipBotEmail:        os.Getenv("ZULIP_BOT_EMAIL"),
-		ZulipBotAPIKey:       os.Getenv("ZULIP_BOT_API_KEY"),
-		ForgejoSecret:        os.Getenv("FORGEJO_SECRET"),
+		ZulipBotAPIKey:       zulipBotAPIKey,
+		WebhookSecret:        os.Getenv("WEBHOOK_SECRET"),
 		Port:                 os.Getenv("PORT"),
 	}
 	if c.Port == "" {
@@ -59,14 +71,14 @@ type payload map[string]any
 // validateSignature checks the HMAC-SHA256 signature from Forgejo.
 // Returns true if no secret is configured (validation disabled).
 func (p *proxy) validateSignature(body []byte, sigHeader string) bool {
-	if p.cfg.ForgejoSecret == "" {
+	if p.cfg.WebhookSecret == "" {
 		return true
 	}
 	if sigHeader == "" {
 		log.Println("warning: missing X-Gitea-Signature header")
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(p.cfg.ForgejoSecret))
+	mac := hmac.New(sha256.New, []byte(p.cfg.WebhookSecret))
 	mac.Write(body)
 	expected := fmt.Sprintf("%x", mac.Sum(nil))
 	return hmac.Equal([]byte(expected), []byte(sigHeader))
