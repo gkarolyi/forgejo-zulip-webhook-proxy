@@ -49,9 +49,16 @@ docker compose up -d
 
 ### 3. Point Forgejo webhooks at the proxy
 
-In Forgejo, set the webhook URL to `http://your-server:8080/` and select all the events you want.
+In each Forgejo repository, add a webhook with the URL:
 
-The proxy URL replaces the Zulip Gitea integration URL in Forgejo — keep the integration URL in `ZULIP_GITEA_WEBHOOK_URL` in the proxy config.
+```
+http://your-server:8080/?stream=git&topic=my-repo-name
+```
+
+- `stream` — the Zulip stream to post to (default: `git` if omitted)
+- `topic` — the Zulip topic to post to (default: the repository name from the payload if omitted)
+
+By encoding stream and topic in the webhook URL, each repo can route to its own Zulip topic without any proxy configuration changes. Select all events you want forwarded.
 
 ### 4. Optional: signature validation
 
@@ -61,12 +68,10 @@ Set `FORGEJO_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 
 | Variable | Required | Description |
 |---|---|---|
-| `ZULIP_GITEA_WEBHOOK_URL` | Yes | Full Zulip Gitea integration URL (with `api_key`, `stream`, `topic` params) |
+| `ZULIP_GITEA_WEBHOOK_URL` | Yes | Zulip Gitea integration base URL with `api_key` (no `stream`/`topic` — those come from each webhook URL) |
 | `ZULIP_SITE` | Yes | Zulip instance base URL, e.g. `https://chat.example.org` |
 | `ZULIP_BOT_EMAIL` | Yes | Bot email for posting via Zulip API |
 | `ZULIP_BOT_API_KEY` | Yes | Bot API key |
-| `ZULIP_STREAM` | No | Override stream for bot API messages (defaults to stream from webhook URL) |
-| `ZULIP_TOPIC` | No | Override topic for bot API messages (defaults to repo name) |
 | `FORGEJO_SECRET` | No | Shared secret for HMAC signature validation |
 | `PORT` | No | Port to listen on (default: 8080) |
 
