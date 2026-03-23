@@ -337,6 +337,239 @@ func TestPullRequestReviewComment(t *testing.T) {
 	}
 }
 
+func TestPullRequestSync(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "synchronized",
+		"pull_request": map[string]any{
+			"number":   float64(12),
+			"title":    "My feature",
+			"html_url": "https://git.example.com/repo/pulls/12",
+		},
+		"sender":     map[string]any{"login": "alice"},
+		"repository": map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request_sync", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "alice") {
+		t.Errorf("message should contain sender, got: %q", msg)
+	}
+	if !strings.Contains(msg, "synchronized") {
+		t.Errorf("message should contain 'synchronized', got: %q", msg)
+	}
+	if !strings.Contains(msg, "#12") {
+		t.Errorf("message should reference PR, got: %q", msg)
+	}
+}
+
+func TestPullRequestReviewRequest(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "review_requested",
+		"pull_request": map[string]any{
+			"number":   float64(3),
+			"title":    "Add feature",
+			"html_url": "https://git.example.com/repo/pulls/3",
+		},
+		"requested_reviewer": map[string]any{"login": "bob"},
+		"sender":             map[string]any{"login": "alice"},
+		"repository":         map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request_review_request", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "alice") {
+		t.Errorf("message should contain sender, got: %q", msg)
+	}
+	if !strings.Contains(msg, "bob") {
+		t.Errorf("message should contain requested reviewer, got: %q", msg)
+	}
+	if !strings.Contains(msg, "#3") {
+		t.Errorf("message should reference PR, got: %q", msg)
+	}
+}
+
+func TestPullRequestAssign(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "assigned",
+		"pull_request": map[string]any{
+			"number":   float64(7),
+			"title":    "Refactor",
+			"html_url": "https://git.example.com/repo/pulls/7",
+		},
+		"assignee":   map[string]any{"login": "carol"},
+		"sender":     map[string]any{"login": "alice"},
+		"repository": map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request_assign", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "carol") {
+		t.Errorf("message should contain assignee, got: %q", msg)
+	}
+	if !strings.Contains(msg, "assigned") {
+		t.Errorf("message should contain 'assigned', got: %q", msg)
+	}
+}
+
+func TestPullRequestLabel(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "label_updated",
+		"pull_request": map[string]any{
+			"number":   float64(2),
+			"title":    "Fix bug",
+			"html_url": "https://git.example.com/repo/pulls/2",
+		},
+		"label":      map[string]any{"name": "bug"},
+		"sender":     map[string]any{"login": "alice"},
+		"repository": map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request_label", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "bug") {
+		t.Errorf("message should contain label name, got: %q", msg)
+	}
+}
+
+func TestPullRequestMilestone(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "milestoned",
+		"pull_request": map[string]any{
+			"number":   float64(4),
+			"title":    "Ship it",
+			"html_url": "https://git.example.com/repo/pulls/4",
+		},
+		"milestone":  map[string]any{"title": "v1.0"},
+		"sender":     map[string]any{"login": "alice"},
+		"repository": map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "pull_request_milestone", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "v1.0") {
+		t.Errorf("message should contain milestone name, got: %q", msg)
+	}
+}
+
+func TestIssueAssign(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "assigned",
+		"issue": map[string]any{
+			"number":   float64(10),
+			"title":    "Investigate crash",
+			"html_url": "https://git.example.com/repo/issues/10",
+		},
+		"assignee":   map[string]any{"login": "dave"},
+		"sender":     map[string]any{"login": "alice"},
+		"repository": map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "issue_assign", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "dave") {
+		t.Errorf("message should contain assignee, got: %q", msg)
+	}
+	if !strings.Contains(msg, "#10") {
+		t.Errorf("message should reference issue, got: %q", msg)
+	}
+}
+
+func TestIssueLabel(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "label_updated",
+		"issue": map[string]any{
+			"number":   float64(11),
+			"title":    "Perf issue",
+			"html_url": "https://git.example.com/repo/issues/11",
+		},
+		"label":      map[string]any{"name": "enhancement"},
+		"sender":     map[string]any{"login": "alice"},
+		"repository": map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "issue_label", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "enhancement") {
+		t.Errorf("message should contain label name, got: %q", msg)
+	}
+}
+
+func TestIssueMilestone(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "milestoned",
+		"issue": map[string]any{
+			"number":   float64(15),
+			"title":    "Track progress",
+			"html_url": "https://git.example.com/repo/issues/15",
+		},
+		"milestone":  map[string]any{"title": "v2.0"},
+		"sender":     map[string]any{"login": "alice"},
+		"repository": map[string]any{"full_name": "owner/repo"},
+	}
+
+	rr := postWebhook(t, p, "issue_milestone", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	msg := getMsg()
+	if !strings.Contains(msg, "v2.0") {
+		t.Errorf("message should contain milestone name, got: %q", msg)
+	}
+}
+
 func TestZulip4xxDropped(t *testing.T) {
 	// Zulip returns 400 (unsupported event) — proxy should return 200 (don't retry)
 	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
