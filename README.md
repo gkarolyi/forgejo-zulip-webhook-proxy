@@ -62,7 +62,9 @@ Set `WEBHOOK_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 | `ZULIP_GITEA_WEBHOOK_URL` | Yes | Zulip Gitea integration URL with `api_key` param (e.g. `https://chat.example.org/api/v1/external/gitea?api_key=XXX`). The site URL and bot API key are derived from this. |
 | `ZULIP_BOT_EMAIL` | Yes | Bot email for posting review/reviewer notifications via Zulip API |
 | `WEBHOOK_SECRET` | No | Shared secret for HMAC signature validation of incoming Forgejo webhooks |
-| `PORT` | No | Port to listen on (default: 8080) |
+| `UI_PASSWORD` | No | Password for web UI Basic auth (any username). No auth if unset. |
+| `PORT` | No | Webhook listener port (default: 8080) |
+| `UI_PORT` | No | Web UI listener port (default: 3000) |
 
 ## Development
 
@@ -100,9 +102,20 @@ docker build -t forgejo-zulip-webhook-proxy .
 docker compose up -d
 ```
 
+## Web UI
+
+The proxy runs a dedicated web UI server on `UI_PORT` (default: 3000). Accessing `http://your-server:3000/` opens a single-page interface with:
+
+- A **test connection** button — sends a `pull_request_comment` self-test event through the proxy's own handler (`POST /test`), forwarding it to Zulip's Gitea integration so you can confirm end-to-end delivery
+- A **live log view** — streams proxy log lines via Server-Sent Events (`GET /logs`), showing the last 200 lines on connect plus new events in real time
+
+Point Traefik or another reverse proxy at port 3000 for easy access.
+
+Set `UI_PASSWORD` to require Basic auth (any username, the env var value as password). If unset, the UI is open to anyone who can reach the port.
+
 ## Health check
 
-`GET /health` returns `200 ok`. Used by Docker's `HEALTHCHECK` directive.
+`GET /health` returns `200 ok` on both the webhook port (8080) and the UI port (3000). Used by Docker's `HEALTHCHECK` directive.
 
 ## Caveats
 

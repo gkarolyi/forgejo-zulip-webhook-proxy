@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // makeProxy creates a proxy configured to use the given test servers.
@@ -442,5 +444,124 @@ func TestZulip4xxDropped(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("got %d, want 200 — 4xx from Zulip should be dropped not retried", rr.Code)
+	}
+}
+
+// --- UI tests ---
+// UI routes live on the dedicated UI server; use p.uiHandler() to exercise them.
+
+func TestUIPageNoAuth(t *testing.T) {
+	p := makeProxy("http://example.com", "http://example.com")
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	p.uiHandler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type: got %q, want text/html", ct)
+	}
+	if !strings.Contains(rr.Body.String(), "Webhook Proxy") {
+		t.Errorf("body should contain 'Webhook Proxy'")
+	}
+}
+
+func TestUIPageAuthRequired(t *testing.T) {
+	p := makeProxy("http://example.com", "http://example.com")
+	p.cfg.UIPassword = "secret"
+	ui := p.uiHandler()
+
+	// No credentials → 401
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	ui.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("no auth: got %d, want 401", rr.Code)
+	}
+
+	// Wrong password → 401
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetBasicAuth("admin", "wrong")
+	rr = httptest.NewRecorder()
+	ui.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("wrong pass: got %d, want 401", rr.Code)
+	}
+
+	// Correct password → 200
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetBasicAuth("admin", "secret")
+	rr = httptest.NewRecorder()
+	ui.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("correct pass: got %d, want 200", rr.Code)
+	}
+}
+
+func TestUITest_Success(t *testing.T) {
+	// /test uses handlePullRequestComment → forwardToGiteaWebhook, so capture
+	// the Gitea webhook endpoint (not the bot API).
+	giteaSrv, getLastReq := captureServer(t)
+	p := makeProxy(giteaSrv, "http://example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/test",
+		strings.NewReader("stream=git&topic=test"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	p.uiHandler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", rr.Code)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatalf("parsing response: %v", err)
+	}
+	if result["ok"] != true {
+		t.Errorf("expected ok=true, got: %v", result)
+	}
+	// Verify the forwarded payload contains the self-test comment body.
+	event, body := getLastReq()
+	if event != "issue_comment" {
+		t.Errorf("expected event=issue_comment (remapped), got: %q", event)
+	}
+	if !strings.Contains(string(body), "self-test") {
+		t.Errorf("expected self-test body in forwarded payload, got: %q", body)
+	}
+}
+
+func TestUITest_MethodNotAllowed(t *testing.T) {
+	p := makeProxy("http://example.com", "http://example.com")
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rr := httptest.NewRecorder()
+	p.uiHandler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("got %d, want 405", rr.Code)
+	}
+}
+
+func TestUILogs_SnapshotAndSSEHeaders(t *testing.T) {
+	p := makeProxy("http://example.com", "http://example.com")
+	p.rb.add("line alpha")
+	p.rb.add("line beta")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/logs", nil).WithContext(ctx)
+	rr := httptest.NewRecorder()
+	p.uiHandler().ServeHTTP(rr, req)
+
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type: got %q, want text/event-stream", ct)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "data: line alpha") {
+		t.Errorf("body should contain snapshot, got: %q", body)
+	}
+	if !strings.Contains(body, "data: line beta") {
+		t.Errorf("body should contain snapshot, got: %q", body)
 	}
 }

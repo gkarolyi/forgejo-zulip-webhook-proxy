@@ -25,7 +25,9 @@ type Config struct {
 	ZulipBotEmail        string
 	ZulipBotAPIKey       string // derived: api_key param of ZulipGiteaWebhookURL
 	WebhookSecret        string
+	UIPassword           string
 	Port                 string
+	UIPort               string
 }
 
 func loadConfig() Config {
@@ -45,10 +47,15 @@ func loadConfig() Config {
 		ZulipBotEmail:        os.Getenv("ZULIP_BOT_EMAIL"),
 		ZulipBotAPIKey:       zulipBotAPIKey,
 		WebhookSecret:        os.Getenv("WEBHOOK_SECRET"),
+		UIPassword:           os.Getenv("UI_PASSWORD"),
 		Port:                 os.Getenv("PORT"),
+		UIPort:               os.Getenv("UI_PORT"),
 	}
 	if c.Port == "" {
 		c.Port = "8080"
+	}
+	if c.UIPort == "" {
+		c.UIPort = "3000"
 	}
 	return c
 }
@@ -56,12 +63,16 @@ func loadConfig() Config {
 type proxy struct {
 	cfg    Config
 	client *http.Client
+	rb     *ringBuf
+	bc     *broadcaster
 }
 
 func newProxy(cfg Config) *proxy {
 	return &proxy{
 		cfg:    cfg,
 		client: &http.Client{Timeout: 10 * time.Second},
+		rb:     newRingBuf(ringBufSize),
+		bc:     newBroadcaster(),
 	}
 }
 
@@ -109,7 +120,7 @@ func resolveStreamAndTopic(pl payload, r *http.Request) (stream, topic string) {
 // postToZulipAPI sends a formatted message via the Zulip bot REST API.
 func (p *proxy) postToZulipAPI(stream, topic, content string) error {
 	if p.cfg.ZulipSite == "" || p.cfg.ZulipBotEmail == "" || p.cfg.ZulipBotAPIKey == "" {
-		return fmt.Errorf("ZULIP_SITE / ZULIP_BOT_EMAIL / ZULIP_BOT_API_KEY not configured")
+		return fmt.Errorf("ZULIP_GITEA_WEBHOOK_URL / ZULIP_BOT_EMAIL not configured")
 	}
 
 	data := url.Values{
@@ -442,9 +453,21 @@ func main() {
 	}
 
 	p := newProxy(cfg)
-	addr := "0.0.0.0:" + cfg.Port
-	log.Printf("proxy listening on %s", addr)
-	if err := http.ListenAndServe(addr, p); err != nil {
+	log.SetOutput(newLogWriter(p.rb, p.bc))
+
+	// Start the UI server on its own port.
+	uiAddr := "0.0.0.0:" + cfg.UIPort
+	go func() {
+		log.Printf("UI listening on %s", uiAddr)
+		if err := http.ListenAndServe(uiAddr, p.uiHandler()); err != nil {
+			log.Fatalf("UI server: %v", err)
+		}
+	}()
+
+	// Start the webhook proxy server.
+	webhookAddr := "0.0.0.0:" + cfg.Port
+	log.Printf("webhook proxy listening on %s", webhookAddr)
+	if err := http.ListenAndServe(webhookAddr, p); err != nil {
 		log.Fatal(err)
 	}
 }
