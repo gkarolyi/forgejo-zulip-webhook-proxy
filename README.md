@@ -1,12 +1,12 @@
 # forgejo-zulip-webhook-proxy
 
-A tiny proxy that fills the gap between Forgejo's webhook events and Zulip's built-in Gitea integration.
+A small Go proxy that fills the gap between Forgejo's webhook events and Zulip's built-in Gitea integration.
 
 ## Why
 
 Zulip's Gitea integration handles `push` and basic `pull_request` events (open/close/merge) but doesn't know about:
 - `pull_request_comment` — Forgejo uses this header (not `issue_comment`) for PR comments, causing a 400 from Zulip
-- `pull_request_review_rejected` — "request changes" reviews; Zulip has no handler at all
+- `pull_request_review` / `pull_request_review_rejected` — review approvals and change requests; Zulip has no handler for these
 
 This proxy sits between Forgejo and Zulip and fixes both.
 
@@ -15,7 +15,8 @@ This proxy sits between Forgejo and Zulip and fixes both.
 | Forgejo event | Proxy action |
 |---|---|
 | `pull_request_comment` | Remaps payload to `issue_comment` format, forwards to Zulip Gitea webhook |
-| `pull_request_review_rejected` | Formats a message, posts via Zulip bot API |
+| `pull_request_review` | Posts `APPROVED: reviewer on #N title` (or `REJECTED:`) via Zulip bot API |
+| `pull_request_review_rejected` | Posts `REJECTED: reviewer on #N title` via Zulip bot API |
 | Everything else (`push`, `pull_request`, etc.) | Forwarded as-is to Zulip Gitea webhook |
 
 ## Setup
@@ -36,7 +37,7 @@ docker compose up -d
 
 In Forgejo, set the webhook URL to `http://your-server:8080/` and select all the events you want.
 
-The proxy URL replaces the Zulip Gitea integration URL in Forgejo — leave the integration URL in `ZULIP_GITEA_WEBHOOK_URL` in the proxy config.
+The proxy URL replaces the Zulip Gitea integration URL in Forgejo — keep the integration URL in `ZULIP_GITEA_WEBHOOK_URL` in the proxy config.
 
 ### 4. Optional: signature validation
 
@@ -54,3 +55,11 @@ Set `FORGEJO_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 | `ZULIP_TOPIC` | No | Override topic for review notifications (defaults to repo name) |
 | `FORGEJO_SECRET` | No | Shared secret for HMAC signature validation |
 | `PORT` | No | Port to listen on (default: 8080) |
+
+## Health check
+
+`GET /health` returns `200 ok`. Used by Docker's `HEALTHCHECK` directive.
+
+## Caveats
+
+Forgejo currently has a bug ([issue #7935](https://codeberg.org/forgejo/forgejo/issues/7935)) where `review.content` is always empty for inline review comments. Review notifications will still post with the PR link; the body text will appear once Forgejo fixes the payload.
