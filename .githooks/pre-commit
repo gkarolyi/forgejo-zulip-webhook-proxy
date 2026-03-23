@@ -1,0 +1,16 @@
+#!/bin/sh
+# Run all tests before allowing a commit.
+
+# Find go binary — support mise-managed installs.
+GO=$(command -v go 2>/dev/null)
+if [ -z "$GO" ] && [ -x "$HOME/.local/bin/mise" ]; then
+    GO=$("$HOME/.local/bin/mise" which go 2>/dev/null)
+fi
+
+if [ -z "$GO" ]; then
+    echo "pre-commit: go not found, skipping tests" >&2
+    exit 0
+fi
+
+echo "Running tests..."
+"$GO" test ./...

@@ -72,6 +72,14 @@ Set `WEBHOOK_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 
 - Go 1.23+
 
+### Setup (first time)
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This installs the pre-commit hook that runs `go test ./...` before every commit.
+
 ### Run tests
 
 ```bash
