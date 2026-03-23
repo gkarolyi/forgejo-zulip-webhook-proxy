@@ -328,7 +328,7 @@ func (p *proxy) handlePullRequestReview(pl payload, eventType, stream, topic str
 	switch {
 	case eventType == "pull_request_rejected" || reviewType == "request_changes":
 		prefix = "REJECTED"
-	case reviewType == "approved":
+	case eventType == "pull_request_approved" || reviewType == "approved":
 		prefix = "APPROVED"
 	}
 
