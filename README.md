@@ -106,7 +106,7 @@ docker compose up -d
 
 The proxy runs a dedicated web UI server on `UI_PORT` (default: 3000). Accessing `http://your-server:3000/` opens a single-page interface with:
 
-- A **test connection** button — simulates a `pull_request_approved` webhook through the proxy's own handler, confirming both Zulip credentials and end-to-end event processing
+- A **test connection** button — sends a `pull_request_comment` self-test event through the proxy's own handler (`POST /test`), forwarding it to Zulip's Gitea integration so you can confirm end-to-end delivery
 - A **live log view** — streams proxy log lines via Server-Sent Events (`GET /logs`), showing the last 200 lines on connect plus new events in real time
 
 Point Traefik or another reverse proxy at port 3000 for easy access.
@@ -115,7 +115,7 @@ Set `UI_PASSWORD` to require Basic auth (any username, the env var value as pass
 
 ## Health check
 
-`GET /health` returns `200 ok`. Used by Docker's `HEALTHCHECK` directive.
+`GET /health` returns `200 ok` on both the webhook port (8080) and the UI port (3000). Used by Docker's `HEALTHCHECK` directive.
 
 ## Caveats
 

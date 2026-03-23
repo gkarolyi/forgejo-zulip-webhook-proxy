@@ -262,13 +262,21 @@ func (p *proxy) handleUITest(w http.ResponseWriter, r *http.Request) {
 		topic = "test"
 	}
 
-	// Simulate a real pull_request_approved webhook so the full handler path
-	// (including logging) is exercised, not just a raw bot API call.
+	// Simulate a pull_request_comment webhook — one of the event types the proxy
+	// handles specially (remaps to issue_comment for Zulip's Gitea integration).
+	// Using a comment makes it obvious in Zulip that this is a self-test, unlike
+	// a fake APPROVED message which could cause confusion.
 	fakePL := payload{
+		"action": "created",
 		"pull_request": payload{
 			"number":   0,
-			"title":    "Webhook proxy self-test",
+			"title":    "Self-test",
 			"html_url": "",
+			"body":     "",
+			"state":    "open",
+		},
+		"comment": payload{
+			"body": "[self-test] Webhook proxy connection OK",
 		},
 		"repository": payload{
 			"full_name": "proxy/self-test",
@@ -276,14 +284,10 @@ func (p *proxy) handleUITest(w http.ResponseWriter, r *http.Request) {
 		"sender": payload{
 			"login": "webhook-proxy",
 		},
-		"review": payload{
-			"type":    "approved",
-			"content": "Self-test triggered from /ui",
-		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	err := p.handlePullRequestReview(fakePL, "pull_request_approved", stream, topic)
+	err := p.handlePullRequestComment(fakePL, stream, topic)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
 		return

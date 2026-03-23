@@ -500,8 +500,10 @@ func TestUIPageAuthRequired(t *testing.T) {
 }
 
 func TestUITest_Success(t *testing.T) {
-	zulipSrv, getMsg := captureZulipAPI(t)
-	p := makeProxy("http://example.com", zulipSrv)
+	// /test uses handlePullRequestComment → forwardToGiteaWebhook, so capture
+	// the Gitea webhook endpoint (not the bot API).
+	giteaSrv, getLastReq := captureServer(t)
+	p := makeProxy(giteaSrv, "http://example.com")
 
 	req := httptest.NewRequest(http.MethodPost, "/test",
 		strings.NewReader("stream=git&topic=test"))
@@ -519,9 +521,13 @@ func TestUITest_Success(t *testing.T) {
 	if result["ok"] != true {
 		t.Errorf("expected ok=true, got: %v", result)
 	}
-	// Verify it sent a real PR review event (APPROVED message) rather than a raw test message.
-	if !strings.Contains(getMsg(), "APPROVED") {
-		t.Errorf("expected APPROVED message sent to Zulip, got: %q", getMsg())
+	// Verify the forwarded payload contains the self-test comment body.
+	event, body := getLastReq()
+	if event != "issue_comment" {
+		t.Errorf("expected event=issue_comment (remapped), got: %q", event)
+	}
+	if !strings.Contains(string(body), "self-test") {
+		t.Errorf("expected self-test body in forwarded payload, got: %q", body)
 	}
 }
 
