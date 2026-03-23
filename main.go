@@ -139,6 +139,9 @@ func (p *proxy) postToZulipAPI(stream, topic, content string) error {
 }
 
 // forwardToGiteaWebhook forwards a payload to the Zulip Gitea integration endpoint.
+// A 4xx response from Zulip means the event type is not supported by the integration;
+// we log a warning and return nil so Forgejo does not retry (retrying will never succeed).
+// A 5xx response is treated as a transient error and returned so Forgejo will retry.
 func (p *proxy) forwardToGiteaWebhook(pl payload, eventType string) error {
 	if p.cfg.ZulipGiteaWebhookURL == "" {
 		return fmt.Errorf("ZULIP_GITEA_WEBHOOK_URL not configured")
@@ -162,12 +165,95 @@ func (p *proxy) forwardToGiteaWebhook(pl payload, eventType string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		// Client error: Zulip doesn't support this event type. Log and drop —
+		// retrying will never succeed.
+		respBody, _ := io.ReadAll(resp.Body)
+		log.Printf("warning: Zulip webhook returned %d for %s (unsupported event, dropping): %s",
+			resp.StatusCode, eventType, respBody)
+		return nil
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Zulip webhook returned %d: %s", resp.StatusCode, body)
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Zulip webhook returned %d: %s", resp.StatusCode, respBody)
 	}
 	log.Printf("forwarded %s to Zulip webhook: %d", eventType, resp.StatusCode)
 	return nil
+}
+
+// handlePullRequestReviewComment handles inline code review comments
+// (pull_request_review_comment events). These are line-level comments left during
+// a formal review on the "Files changed" tab. Zulip has no handler for this event
+// type, so we post a formatted message via the bot API.
+func (p *proxy) handlePullRequestReviewComment(pl payload) error {
+	pr := getMap(pl, "pull_request")
+	if pr == nil {
+		pr = payload{}
+	}
+	comment := getMap(pl, "comment")
+	if comment == nil {
+		comment = payload{}
+	}
+	repo := getMap(pl, "repository")
+	if repo == nil {
+		repo = payload{}
+	}
+
+	prNumber := firstNonNil(pr["number"], pl["number"], "?")
+	prTitle := getString(pr, "title")
+	prURL := getString(pr, "html_url")
+
+	commenter := ""
+	if user := getMap(comment, "user"); user != nil {
+		commenter = getString(user, "login")
+	}
+	if commenter == "" {
+		if sender := getMap(pl, "sender"); sender != nil {
+			commenter = getString(sender, "login")
+		}
+	}
+	if commenter == "" {
+		commenter = "someone"
+	}
+
+	repoName := getString(repo, "full_name")
+	if repoName == "" {
+		repoName = getString(repo, "name")
+	}
+
+	// Build PR reference with optional link.
+	prRef := fmt.Sprintf("#%v", prNumber)
+	if prTitle != "" {
+		prRef = fmt.Sprintf("#%v %s", prNumber, prTitle)
+	}
+	if prURL != "" {
+		prRef = fmt.Sprintf("[%s](%s)", prRef, prURL)
+	}
+
+	// Include file path and line number if present.
+	location := ""
+	if path := getString(comment, "path"); path != "" {
+		location = fmt.Sprintf(" on `%s`", path)
+		// line can be an int (new_line or line field)
+		if line, ok := comment["line"]; ok && line != nil {
+			location = fmt.Sprintf(" on `%s:%v`", path, line)
+		}
+	}
+
+	commentURL := getString(comment, "html_url")
+	commentRef := "commented"
+	if commentURL != "" {
+		commentRef = fmt.Sprintf("[commented](%s)", commentURL)
+	}
+
+	msg := fmt.Sprintf("**[%s]** %s %s%s in %s", repoName, commenter, commentRef, location, prRef)
+
+	if body := strings.TrimSpace(getString(comment, "body")); body != "" {
+		msg += "\n\n> " + strings.ReplaceAll(body, "\n", "\n> ")
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
 }
 
 // handlePullRequestComment remaps pull_request_comment → issue_comment so
@@ -306,6 +392,8 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handleErr = p.handlePullRequestComment(pl)
 	case "pull_request_review", "pull_request_review_rejected":
 		handleErr = p.handlePullRequestReview(pl, event)
+	case "pull_request_review_comment":
+		handleErr = p.handlePullRequestReviewComment(pl)
 	default:
 		handleErr = p.forwardToGiteaWebhook(pl, event)
 	}
