@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,74 +111,10 @@ func newLogWriter(rb *ringBuf, bc *broadcaster) io.Writer {
 	return &multiLogWriter{rb: rb, bc: bc, dest: os.Stderr}
 }
 
-// --- embedded HTML ---
-
-const uiHTML = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Webhook Proxy</title>
-<style>
-body { font-family: monospace; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #1a1a1a; color: #ddd; }
-h1 { font-size: 1.2rem; color: #fff; }
-h2 { font-size: 1rem; margin-top: 2rem; color: #aaa; }
-label { display: inline-block; margin-right: 1rem; }
-input[type=text] { background: #2a2a2a; border: 1px solid #444; color: #ddd; padding: 4px 6px; font-family: monospace; border-radius: 3px; }
-button { background: #334; border: 1px solid #556; color: #ddd; padding: 4px 12px; cursor: pointer; border-radius: 3px; }
-button:hover { background: #445; }
-#result { margin-top: 0.6rem; font-size: 0.9rem; min-height: 1.2em; }
-.ok { color: #4f4; }
-.err { color: #f66; }
-#logs { background: #111; color: #ccc; padding: 1rem; height: 420px; overflow-y: auto; white-space: pre-wrap; font-size: 0.82rem; border-radius: 4px; border: 1px solid #333; margin-top: 0.5rem; }
-</style>
-</head>
-<body>
-<h1>Webhook Proxy</h1>
-
-<h2>Test connection</h2>
-<form id="testForm">
-  <label>Stream <input type="text" name="stream" value="git" style="width:100px"></label>
-  <label>Topic <input type="text" name="topic" value="test" style="width:120px"></label>
-  <button type="submit">Send test message</button>
-</form>
-<div id="result"></div>
-
-<h2>Live logs</h2>
-<div id="logs"></div>
-
-<script>
-document.getElementById('testForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const res = document.getElementById('result');
-  res.className = '';
-  res.textContent = 'Sending\u2026';
-  try {
-    const r = await fetch('/test', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: new URLSearchParams(new FormData(e.target)),
-    });
-    const j = await r.json();
-    res.className = j.ok ? 'ok' : 'err';
-    res.textContent = j.ok ? 'OK \u2014 test message sent to Zulip' : ('Error: ' + j.error);
-  } catch (err) {
-    res.className = 'err';
-    res.textContent = 'Request failed: ' + err;
-  }
-});
-
-const logDiv = document.getElementById('logs');
-const es = new EventSource('/logs');
-es.onmessage = (e) => {
-  logDiv.textContent += e.data + '\n';
-  logDiv.scrollTop = logDiv.scrollHeight;
-};
-es.onerror = () => {
-  logDiv.textContent += '[connection lost, retrying\u2026]\n';
-};
-</script>
-</body>
-</html>`
+// uiHTML is embedded from ui.html at compile time.
+//
+//go:embed ui.html
+var uiHTML string
 
 // --- UI handlers ---
 
@@ -268,20 +205,20 @@ func (p *proxy) handleUITest(w http.ResponseWriter, r *http.Request) {
 	// a fake APPROVED message which could cause confusion.
 	fakePL := payload{
 		"action": "created",
-		"pull_request": payload{
+		"pull_request": map[string]any{
 			"number":   0,
 			"title":    "Self-test",
 			"html_url": "",
 			"body":     "",
 			"state":    "open",
 		},
-		"comment": payload{
+		"comment": map[string]any{
 			"body": "[self-test] Webhook proxy connection OK",
 		},
-		"repository": payload{
+		"repository": map[string]any{
 			"full_name": "proxy/self-test",
 		},
-		"sender": payload{
+		"sender": map[string]any{
 			"login": "webhook-proxy",
 		},
 	}
