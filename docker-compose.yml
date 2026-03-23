@@ -3,7 +3,8 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8080:8080"   # webhook endpoint
+      - "3000:3000"   # web UI
     environment:
       # Required: Zulip Gitea integration URL. The api_key param is also used
       # for bot API calls; the site URL is derived from the host.
@@ -14,4 +15,6 @@ services:
 
       # Optional
       # WEBHOOK_SECRET: "..."     # shared secret for HMAC signature validation
-      # PORT: "8080"
+      # UI_PASSWORD: "..."        # password for web UI Basic auth (no auth if unset)
+      # PORT: "8080"              # webhook listener port
+      # UI_PORT: "3000"           # web UI listener port
