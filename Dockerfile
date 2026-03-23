@@ -1,7 +1,8 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /app
 COPY go.mod .
-COPY main.go .
+COPY *.go .
+RUN go test ./...
 RUN go build -ldflags="-s -w" -o proxy .
 
 FROM alpine:3.21
