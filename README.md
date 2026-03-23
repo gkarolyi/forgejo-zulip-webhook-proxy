@@ -22,7 +22,7 @@ This proxy sits between Forgejo and Zulip and handles all of them.
 | `pull_request` action=`review_requested` | Posts `user requested review from X on #N title` via Zulip bot API |
 | `pull_request` (all other actions) | Forwarded as-is to Zulip Gitea webhook |
 | `push`, `create`, `issues`, `issue_comment`, `release` | Forwarded as-is to Zulip Gitea webhook |
-| Unknown events | Forwarded; silently dropped if Zulip returns 4xx (unsupported) |
+| Unknown events | Forwarded; logged and dropped if Zulip returns 4xx (unsupported event type) |
 
 ## Setup
 
