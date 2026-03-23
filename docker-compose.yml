@@ -5,15 +5,13 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Required: Zulip Gitea integration endpoint (api_key only — stream and topic
-      # are injected per-request from the Forgejo webhook URL query params)
+      # Required: Zulip Gitea integration URL. The api_key param is also used
+      # for bot API calls; the site URL is derived from the host.
       ZULIP_GITEA_WEBHOOK_URL: "https://chat.example.org/api/v1/external/gitea?api_key=XXX"
 
-      # Required for review notifications (bot API)
-      ZULIP_SITE: "https://chat.example.org"
+      # Required: bot email for review/assign/label notifications
       ZULIP_BOT_EMAIL: "bot@example.org"
-      ZULIP_BOT_API_KEY: "your-bot-api-key"
 
       # Optional
-      # FORGEJO_SECRET: "..."     # shared secret for HMAC signature validation
+      # WEBHOOK_SECRET: "..."     # shared secret for HMAC signature validation
       # PORT: "8080"
