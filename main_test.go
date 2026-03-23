@@ -291,3 +291,65 @@ func TestMethodNotAllowed(t *testing.T) {
 		t.Errorf("got %d, want 405", rr.Code)
 	}
 }
+
+func TestPullRequestReviewComment(t *testing.T) {
+	zulipSrv, getMsg := captureZulipAPI(t)
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"pull_request": map[string]any{
+			"number":   float64(9),
+			"title":    "Add logging",
+			"html_url": "https://git.example.com/repo/pulls/9",
+		},
+		"comment": map[string]any{
+			"body":     "This function needs a timeout",
+			"path":     "main.go",
+			"line":     float64(42),
+			"html_url": "https://git.example.com/repo/pulls/9#discussion_r1",
+			"user":     map[string]any{"login": "gergely"},
+		},
+		"repository": map[string]any{
+			"full_name": "owner/repo",
+			"name":      "repo",
+		},
+	}
+
+	rr := postWebhook(t, p, "pull_request_review_comment", pl)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("response: got %d, want 200", rr.Code)
+	}
+
+	msg := getMsg()
+	if !strings.Contains(msg, "gergely") {
+		t.Errorf("message should contain commenter name, got: %q", msg)
+	}
+	if !strings.Contains(msg, "main.go") {
+		t.Errorf("message should contain file path, got: %q", msg)
+	}
+	if !strings.Contains(msg, "This function needs a timeout") {
+		t.Errorf("message should contain comment body, got: %q", msg)
+	}
+	if !strings.Contains(msg, "#9") {
+		t.Errorf("message should reference PR number, got: %q", msg)
+	}
+}
+
+func TestZulip4xxDropped(t *testing.T) {
+	// Zulip returns 400 (unsupported event) — proxy should return 200 (don't retry)
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad request", http.StatusBadRequest)
+	}))
+	defer badSrv.Close()
+
+	p := makeProxy(badSrv.URL, "http://example.com")
+
+	pl := map[string]any{"repository": map[string]any{"full_name": "owner/repo"}}
+	rr := postWebhook(t, p, "some_unknown_event", pl)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200 — 4xx from Zulip should be dropped not retried", rr.Code)
+	}
+}
