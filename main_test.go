@@ -385,7 +385,7 @@ func TestPushEventForwarded(t *testing.T) {
 func TestInvalidSignatureRejected(t *testing.T) {
 	webhookURL, _ := captureServer(t)
 	p := makeProxy(webhookURL, "http://example.com")
-	p.cfg.ForgejoSecret = "mysecret"
+	p.cfg.WebhookSecret = "mysecret"
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
