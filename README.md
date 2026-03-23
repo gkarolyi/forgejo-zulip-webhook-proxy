@@ -62,6 +62,7 @@ Set `WEBHOOK_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 | `ZULIP_GITEA_WEBHOOK_URL` | Yes | Zulip Gitea integration URL with `api_key` param (e.g. `https://chat.example.org/api/v1/external/gitea?api_key=XXX`). The site URL and bot API key are derived from this. |
 | `ZULIP_BOT_EMAIL` | Yes | Bot email for posting review/reviewer notifications via Zulip API |
 | `WEBHOOK_SECRET` | No | Shared secret for HMAC signature validation of incoming Forgejo webhooks |
+| `UI_PASSWORD` | No | Password for the `/ui` web interface (Basic auth, any username). No auth if unset. |
 | `PORT` | No | Port to listen on (default: 8080) |
 
 ## Development
@@ -99,6 +100,15 @@ docker build -t forgejo-zulip-webhook-proxy .
 # Run
 docker compose up -d
 ```
+
+## Web UI
+
+`GET /ui` serves a single-page interface with:
+
+- A **test connection** button — sends a dummy message via the Zulip bot API to confirm credentials are working
+- A **live log view** — streams proxy log lines via Server-Sent Events (`GET /ui/logs`), showing the last 200 lines on connect plus new events in real time
+
+Set `UI_PASSWORD` to require Basic auth (any username, the env var value as password). If unset, `/ui` is open to anyone who can reach the proxy.
 
 ## Health check
 

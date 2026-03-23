@@ -14,4 +14,5 @@ services:
 
       # Optional
       # WEBHOOK_SECRET: "..."     # shared secret for HMAC signature validation
+      # UI_PASSWORD: "..."        # password for /ui Basic auth (no auth if unset)
       # PORT: "8080"

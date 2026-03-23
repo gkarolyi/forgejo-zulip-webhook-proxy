@@ -25,6 +25,7 @@ type Config struct {
 	ZulipBotEmail        string
 	ZulipBotAPIKey       string // derived: api_key param of ZulipGiteaWebhookURL
 	WebhookSecret        string
+	UIPassword           string
 	Port                 string
 }
 
@@ -45,6 +46,7 @@ func loadConfig() Config {
 		ZulipBotEmail:        os.Getenv("ZULIP_BOT_EMAIL"),
 		ZulipBotAPIKey:       zulipBotAPIKey,
 		WebhookSecret:        os.Getenv("WEBHOOK_SECRET"),
+		UIPassword:           os.Getenv("UI_PASSWORD"),
 		Port:                 os.Getenv("PORT"),
 	}
 	if c.Port == "" {
@@ -56,12 +58,16 @@ func loadConfig() Config {
 type proxy struct {
 	cfg    Config
 	client *http.Client
+	rb     *ringBuf
+	bc     *broadcaster
 }
 
 func newProxy(cfg Config) *proxy {
 	return &proxy{
 		cfg:    cfg,
 		client: &http.Client{Timeout: 10 * time.Second},
+		rb:     newRingBuf(ringBufSize),
+		bc:     newBroadcaster(),
 	}
 }
 
@@ -109,7 +115,7 @@ func resolveStreamAndTopic(pl payload, r *http.Request) (stream, topic string) {
 // postToZulipAPI sends a formatted message via the Zulip bot REST API.
 func (p *proxy) postToZulipAPI(stream, topic, content string) error {
 	if p.cfg.ZulipSite == "" || p.cfg.ZulipBotEmail == "" || p.cfg.ZulipBotAPIKey == "" {
-		return fmt.Errorf("ZULIP_SITE / ZULIP_BOT_EMAIL / ZULIP_BOT_API_KEY not configured")
+		return fmt.Errorf("ZULIP_GITEA_WEBHOOK_URL / ZULIP_BOT_EMAIL not configured")
 	}
 
 	data := url.Values{
@@ -375,6 +381,21 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Web UI endpoints.
+	if strings.HasPrefix(r.URL.Path, "/ui") {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/ui":
+			p.handleUI(w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/ui/logs":
+			p.handleUILogs(w, r)
+		case r.URL.Path == "/ui/test":
+			p.handleUITest(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -442,6 +463,7 @@ func main() {
 	}
 
 	p := newProxy(cfg)
+	log.SetOutput(newLogWriter(p.rb, p.bc))
 	addr := "0.0.0.0:" + cfg.Port
 	log.Printf("proxy listening on %s", addr)
 	if err := http.ListenAndServe(addr, p); err != nil {
