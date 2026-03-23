@@ -253,7 +253,7 @@ func TestInvalidSignatureRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Gitea-Event", "push")
-	req.Header.Set("X-Gitea-Signature", "sha256=wrongsignature")
+	req.Header.Set("X-Gitea-Signature", "wrongsignature")
 
 	rr := httptest.NewRecorder()
 	p.ServeHTTP(rr, req)
