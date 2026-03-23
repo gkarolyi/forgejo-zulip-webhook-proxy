@@ -181,27 +181,267 @@ func (p *proxy) forwardToGiteaWebhook(pl payload, eventType string) error {
 	return nil
 }
 
-// handlePullRequestReviewComment handles inline code review comments
-// (pull_request_review_comment events). These are line-level comments left during
-// a formal review on the "Files changed" tab. Zulip has no handler for this event
-// type, so we post a formatted message via the bot API.
-func (p *proxy) handlePullRequestReviewComment(pl payload) error {
-	pr := getMap(pl, "pull_request")
-	if pr == nil {
-		pr = payload{}
-	}
-	comment := getMap(pl, "comment")
-	if comment == nil {
-		comment = payload{}
+// --- shared helpers for event handlers ---
+
+// extractEntityFields pulls common fields from a PR or issue payload.
+// entityKey is "pull_request" or "issue".
+func extractEntityFields(pl payload, entityKey string) (number any, title, htmlURL, repoName, sender string) {
+	entity := getMap(pl, entityKey)
+	if entity == nil {
+		entity = payload{}
 	}
 	repo := getMap(pl, "repository")
 	if repo == nil {
 		repo = payload{}
 	}
 
-	prNumber := firstNonNil(pr["number"], pl["number"], "?")
-	prTitle := getString(pr, "title")
-	prURL := getString(pr, "html_url")
+	number = firstNonNil(entity["number"], pl["number"], "?")
+	title = getString(entity, "title")
+	htmlURL = getString(entity, "html_url")
+
+	repoName = getString(repo, "full_name")
+	if repoName == "" {
+		repoName = getString(repo, "name")
+	}
+
+	if s := getMap(pl, "sender"); s != nil {
+		sender = getString(s, "login")
+	}
+	if sender == "" {
+		sender = "someone"
+	}
+	return
+}
+
+// buildRef builds a Markdown reference like "[#5 title](url)" or "#5".
+func buildRef(number any, title, htmlURL string) string {
+	ref := fmt.Sprintf("#%v", number)
+	if title != "" {
+		ref = fmt.Sprintf("#%v %s", number, title)
+	}
+	if htmlURL != "" {
+		ref = fmt.Sprintf("[%s](%s)", ref, htmlURL)
+	}
+	return ref
+}
+
+// --- PR metadata event handlers ---
+
+// handlePullRequestSync handles pull_request_sync events (new commits pushed to a PR branch).
+func (p *proxy) handlePullRequestSync(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
+	msg := fmt.Sprintf("**[%s]** %s synchronized %s", repoName, sender, buildRef(number, title, htmlURL))
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// handlePullRequestReviewRequest handles pull_request_review_request events
+// (reviewer added or removed on a PR).
+func (p *proxy) handlePullRequestReviewRequest(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
+
+	reviewer := ""
+	if rr := getMap(pl, "requested_reviewer"); rr != nil {
+		reviewer = getString(rr, "login")
+	}
+
+	var msg string
+	action := getString(pl, "action")
+	ref := buildRef(number, title, htmlURL)
+	switch action {
+	case "review_request_removed":
+		if reviewer != "" {
+			msg = fmt.Sprintf("**[%s]** %s removed review request for %s on %s", repoName, sender, reviewer, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s removed a review request on %s", repoName, sender, ref)
+		}
+	default:
+		if reviewer != "" {
+			msg = fmt.Sprintf("**[%s]** %s requested review from %s on %s", repoName, sender, reviewer, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s requested a review on %s", repoName, sender, ref)
+		}
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// handlePullRequestAssign handles pull_request_assign events.
+func (p *proxy) handlePullRequestAssign(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
+
+	assignee := ""
+	if a := getMap(pl, "assignee"); a != nil {
+		assignee = getString(a, "login")
+	}
+
+	ref := buildRef(number, title, htmlURL)
+	var msg string
+	if getString(pl, "action") == "unassigned" {
+		if assignee != "" {
+			msg = fmt.Sprintf("**[%s]** %s unassigned %s from %s", repoName, sender, assignee, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s unassigned someone from %s", repoName, sender, ref)
+		}
+	} else {
+		if assignee != "" {
+			msg = fmt.Sprintf("**[%s]** %s assigned %s to %s", repoName, sender, assignee, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s assigned someone to %s", repoName, sender, ref)
+		}
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// handlePullRequestLabel handles pull_request_label events.
+func (p *proxy) handlePullRequestLabel(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
+
+	label := ""
+	if l := getMap(pl, "label"); l != nil {
+		label = getString(l, "name")
+	}
+
+	ref := buildRef(number, title, htmlURL)
+	var msg string
+	if getString(pl, "action") == "label_cleared" {
+		if label != "" {
+			msg = fmt.Sprintf("**[%s]** %s removed label \"%s\" from %s", repoName, sender, label, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s cleared labels on %s", repoName, sender, ref)
+		}
+	} else {
+		if label != "" {
+			msg = fmt.Sprintf("**[%s]** %s added label \"%s\" to %s", repoName, sender, label, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s updated labels on %s", repoName, sender, ref)
+		}
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// handlePullRequestMilestone handles pull_request_milestone events.
+func (p *proxy) handlePullRequestMilestone(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "pull_request")
+
+	milestone := ""
+	if m := getMap(pl, "milestone"); m != nil {
+		milestone = getString(m, "title")
+	}
+
+	ref := buildRef(number, title, htmlURL)
+	var msg string
+	if getString(pl, "action") == "demilestoned" {
+		msg = fmt.Sprintf("**[%s]** %s removed milestone from %s", repoName, sender, ref)
+	} else if milestone != "" {
+		msg = fmt.Sprintf("**[%s]** %s set milestone \"%s\" on %s", repoName, sender, milestone, ref)
+	} else {
+		msg = fmt.Sprintf("**[%s]** %s updated milestone on %s", repoName, sender, ref)
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// --- Issue metadata event handlers ---
+
+// handleIssueAssign handles issue_assign events.
+func (p *proxy) handleIssueAssign(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "issue")
+
+	assignee := ""
+	if a := getMap(pl, "assignee"); a != nil {
+		assignee = getString(a, "login")
+	}
+
+	ref := buildRef(number, title, htmlURL)
+	var msg string
+	if getString(pl, "action") == "unassigned" {
+		if assignee != "" {
+			msg = fmt.Sprintf("**[%s]** %s unassigned %s from %s", repoName, sender, assignee, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s unassigned someone from %s", repoName, sender, ref)
+		}
+	} else {
+		if assignee != "" {
+			msg = fmt.Sprintf("**[%s]** %s assigned %s to %s", repoName, sender, assignee, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s assigned someone to %s", repoName, sender, ref)
+		}
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// handleIssueLabel handles issue_label events.
+func (p *proxy) handleIssueLabel(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "issue")
+
+	label := ""
+	if l := getMap(pl, "label"); l != nil {
+		label = getString(l, "name")
+	}
+
+	ref := buildRef(number, title, htmlURL)
+	var msg string
+	if getString(pl, "action") == "label_cleared" {
+		if label != "" {
+			msg = fmt.Sprintf("**[%s]** %s removed label \"%s\" from %s", repoName, sender, label, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s cleared labels on %s", repoName, sender, ref)
+		}
+	} else {
+		if label != "" {
+			msg = fmt.Sprintf("**[%s]** %s added label \"%s\" to %s", repoName, sender, label, ref)
+		} else {
+			msg = fmt.Sprintf("**[%s]** %s updated labels on %s", repoName, sender, ref)
+		}
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// handleIssueMilestone handles issue_milestone events.
+func (p *proxy) handleIssueMilestone(pl payload) error {
+	number, title, htmlURL, repoName, sender := extractEntityFields(pl, "issue")
+
+	milestone := ""
+	if m := getMap(pl, "milestone"); m != nil {
+		milestone = getString(m, "title")
+	}
+
+	ref := buildRef(number, title, htmlURL)
+	var msg string
+	if getString(pl, "action") == "demilestoned" {
+		msg = fmt.Sprintf("**[%s]** %s removed milestone from %s", repoName, sender, ref)
+	} else if milestone != "" {
+		msg = fmt.Sprintf("**[%s]** %s set milestone \"%s\" on %s", repoName, sender, milestone, ref)
+	} else {
+		msg = fmt.Sprintf("**[%s]** %s updated milestone on %s", repoName, sender, ref)
+	}
+
+	stream, topic := p.resolveStreamAndTopic(pl)
+	return p.postToZulipAPI(stream, topic, msg)
+}
+
+// handlePullRequestReviewComment handles inline code review comments
+// (pull_request_review_comment events). These are line-level comments left during
+// a formal review on the "Files changed" tab. Zulip has no handler for this event
+// type, so we post a formatted message via the bot API.
+func (p *proxy) handlePullRequestReviewComment(pl payload) error {
+	number, title, prURL, repoName, _ := extractEntityFields(pl, "pull_request")
+
+	comment := getMap(pl, "comment")
+	if comment == nil {
+		comment = payload{}
+	}
 
 	commenter := ""
 	if user := getMap(comment, "user"); user != nil {
@@ -216,25 +456,10 @@ func (p *proxy) handlePullRequestReviewComment(pl payload) error {
 		commenter = "someone"
 	}
 
-	repoName := getString(repo, "full_name")
-	if repoName == "" {
-		repoName = getString(repo, "name")
-	}
-
-	// Build PR reference with optional link.
-	prRef := fmt.Sprintf("#%v", prNumber)
-	if prTitle != "" {
-		prRef = fmt.Sprintf("#%v %s", prNumber, prTitle)
-	}
-	if prURL != "" {
-		prRef = fmt.Sprintf("[%s](%s)", prRef, prURL)
-	}
-
 	// Include file path and line number if present.
 	location := ""
 	if path := getString(comment, "path"); path != "" {
 		location = fmt.Sprintf(" on `%s`", path)
-		// line can be an int (new_line or line field)
 		if line, ok := comment["line"]; ok && line != nil {
 			location = fmt.Sprintf(" on `%s:%v`", path, line)
 		}
@@ -246,7 +471,7 @@ func (p *proxy) handlePullRequestReviewComment(pl payload) error {
 		commentRef = fmt.Sprintf("[commented](%s)", commentURL)
 	}
 
-	msg := fmt.Sprintf("**[%s]** %s %s%s in %s", repoName, commenter, commentRef, location, prRef)
+	msg := fmt.Sprintf("**[%s]** %s %s%s in %s", repoName, commenter, commentRef, location, buildRef(number, title, prURL))
 
 	if body := strings.TrimSpace(getString(comment, "body")); body != "" {
 		msg += "\n\n> " + strings.ReplaceAll(body, "\n", "\n> ")
@@ -289,22 +514,12 @@ func (p *proxy) handlePullRequestComment(pl payload) error {
 // inline review comments (issue #7935). Messages will still post with the PR link;
 // the body will appear once Forgejo fixes the payload.
 func (p *proxy) handlePullRequestReview(pl payload, eventType string) error {
-	pr := getMap(pl, "pull_request")
-	if pr == nil {
-		pr = payload{}
-	}
+	number, title, prURL, repoName, _ := extractEntityFields(pl, "pull_request")
+
 	review := getMap(pl, "review")
 	if review == nil {
 		review = payload{}
 	}
-	repo := getMap(pl, "repository")
-	if repo == nil {
-		repo = payload{}
-	}
-
-	prNumber := firstNonNil(pr["number"], pl["number"], "?")
-	prTitle := getString(pr, "title")
-	prURL := getString(pr, "html_url")
 
 	reviewer := ""
 	if user := getMap(review, "user"); user != nil {
@@ -319,11 +534,6 @@ func (p *proxy) handlePullRequestReview(pl payload, eventType string) error {
 		reviewer = "someone"
 	}
 
-	repoName := getString(repo, "full_name")
-	if repoName == "" {
-		repoName = getString(repo, "name")
-	}
-
 	// Determine prefix from event type and review.type field.
 	prefix := "REVIEWED"
 	reviewType := getString(review, "type")
@@ -334,16 +544,7 @@ func (p *proxy) handlePullRequestReview(pl payload, eventType string) error {
 		prefix = "APPROVED"
 	}
 
-	// Build the message.
-	prRef := fmt.Sprintf("#%v", prNumber)
-	if prTitle != "" {
-		prRef = fmt.Sprintf("#%v %s", prNumber, prTitle)
-	}
-	if prURL != "" {
-		prRef = fmt.Sprintf("[%s](%s)", prRef, prURL)
-	}
-
-	msg := fmt.Sprintf("**[%s]** %s: %s on %s", repoName, prefix, reviewer, prRef)
+	msg := fmt.Sprintf("**[%s]** %s: %s on %s", repoName, prefix, reviewer, buildRef(number, title, prURL))
 
 	if body := strings.TrimSpace(getString(review, "content")); body != "" {
 		msg += "\n\n> " + body
@@ -388,12 +589,36 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var handleErr error
 	switch event {
+	// PR comment: remap to issue_comment for Zulip's Gitea integration
 	case "pull_request_comment":
 		handleErr = p.handlePullRequestComment(pl)
+	// PR review (approve/reject): post via Zulip bot API
 	case "pull_request_review", "pull_request_review_rejected":
 		handleErr = p.handlePullRequestReview(pl, event)
+	// PR inline review comment: post via Zulip bot API
 	case "pull_request_review_comment":
 		handleErr = p.handlePullRequestReviewComment(pl)
+	// PR metadata events: post compact messages via Zulip bot API
+	case "pull_request_sync":
+		handleErr = p.handlePullRequestSync(pl)
+	case "pull_request_review_request":
+		handleErr = p.handlePullRequestReviewRequest(pl)
+	case "pull_request_assign":
+		handleErr = p.handlePullRequestAssign(pl)
+	case "pull_request_label":
+		handleErr = p.handlePullRequestLabel(pl)
+	case "pull_request_milestone":
+		handleErr = p.handlePullRequestMilestone(pl)
+	// Issue metadata events: post compact messages via Zulip bot API
+	case "issue_assign":
+		handleErr = p.handleIssueAssign(pl)
+	case "issue_label":
+		handleErr = p.handleIssueLabel(pl)
+	case "issue_milestone":
+		handleErr = p.handleIssueMilestone(pl)
+	// All other events: forward to Zulip Gitea webhook (natively supported: push,
+	// create, pull_request, issues, issue_comment, release). Unknown events are
+	// forwarded and dropped if Zulip returns 4xx.
 	default:
 		handleErr = p.forwardToGiteaWebhook(pl, event)
 	}
