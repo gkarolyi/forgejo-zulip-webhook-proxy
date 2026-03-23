@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run all tests before allowing a commit.
+echo "Running tests..."
+go test ./...
