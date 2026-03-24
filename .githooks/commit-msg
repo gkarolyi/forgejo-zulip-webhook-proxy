@@ -1,0 +1,7 @@
+#!/bin/sh
+# Append Co-Authored-By trailer for AI-assisted commits.
+TRAILER="Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+MSG=$(cat "$1")
+if ! echo "$MSG" | grep -qF "$TRAILER"; then
+    printf '\n%s\n' "$TRAILER" >> "$1"
+fi
