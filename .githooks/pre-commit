@@ -1,4 +1,9 @@
 #!/bin/sh
-# Run all tests before allowing a commit.
+# Format staged Go files and run tests before allowing a commit.
+
+echo "Formatting..."
+mise exec -- gofmt -w .
+git add -u
+
 echo "Running tests..."
 mise exec -- go test ./...

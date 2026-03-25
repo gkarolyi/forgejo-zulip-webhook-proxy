@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -381,6 +384,66 @@ func TestPushEventForwarded(t *testing.T) {
 	event, _ := getLastReq()
 	if event != "push" {
 		t.Errorf("forwarded event: got %q, want %q", event, "push")
+	}
+}
+
+func TestValidSignatureAccepted(t *testing.T) {
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, "http://example.com")
+	p.cfg.WebhookSecret = "mysecret"
+
+	body := `{"ref":"refs/heads/main","repository":{"full_name":"owner/repo"}}`
+	mac := hmac.New(sha256.New, []byte("mysecret"))
+	mac.Write([]byte(body))
+	sig := fmt.Sprintf("%x", mac.Sum(nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/?stream=s&topic=t", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Gitea-Event", "push")
+	req.Header.Set("X-Gitea-Signature", sig)
+
+	rr := httptest.NewRecorder()
+	p.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200 for valid signature", rr.Code)
+	}
+}
+
+func TestMissingSignatureRejected(t *testing.T) {
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, "http://example.com")
+	p.cfg.WebhookSecret = "mysecret"
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Gitea-Event", "push")
+	// No X-Gitea-Signature header
+
+	rr := httptest.NewRecorder()
+	p.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("got %d, want 403 for missing signature", rr.Code)
+	}
+}
+
+func TestEmptySecretDisablesValidation(t *testing.T) {
+	webhookURL, _ := captureServer(t)
+	p := makeProxy(webhookURL, "http://example.com")
+	// WebhookSecret is empty — validation disabled
+
+	body := `{"ref":"refs/heads/main","repository":{"full_name":"owner/repo"}}`
+	req := httptest.NewRequest(http.MethodPost, "/?stream=s&topic=t", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Gitea-Event", "push")
+	// No signature header — should still pass
+
+	rr := httptest.NewRecorder()
+	p.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("got %d, want 200 when secret is not configured", rr.Code)
 	}
 }
 

@@ -146,7 +146,10 @@ func (p *proxy) postToZulipAPI(stream, topic, content string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("Zulip API returned %d (failed to read response: %w)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("Zulip API returned %d: %s", resp.StatusCode, body)
 	}
 	log.Printf("posted to Zulip API: %d", resp.StatusCode)
@@ -193,13 +196,20 @@ func (p *proxy) forwardToGiteaWebhook(pl payload, eventType, stream, topic strin
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 		// Client error: Zulip doesn't support this event type. Log and drop —
 		// retrying will never succeed.
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("dropped event %s: Zulip returned %d (failed to read response: %v)", eventType, resp.StatusCode, err)
+			return nil
+		}
 		log.Printf("dropped event %s: Zulip returned %d (event type not supported by the integration): %s",
 			eventType, resp.StatusCode, respBody)
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("Zulip webhook returned %d (failed to read response: %w)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("Zulip webhook returned %d: %s", resp.StatusCode, respBody)
 	}
 	log.Printf("forwarded %s to Zulip webhook: %d", eventType, resp.StatusCode)
@@ -391,6 +401,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024) // 10 MB limit
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusInternalServerError)

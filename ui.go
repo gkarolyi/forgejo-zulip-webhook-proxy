@@ -157,7 +157,7 @@ func (p *proxy) handleUILogs(w http.ResponseWriter, r *http.Request) {
 
 	// Send existing ring buffer contents first.
 	for _, line := range p.rb.snapshot() {
-		fmt.Fprintf(w, "data: %s\n\n", line)
+		fmt.Fprintf(w, "data: %s\n\n", strings.ReplaceAll(line, "\n", " "))
 	}
 	flusher.Flush()
 
@@ -171,7 +171,7 @@ func (p *proxy) handleUILogs(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case line := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", line)
+			fmt.Fprintf(w, "data: %s\n\n", strings.ReplaceAll(line, "\n", " "))
 			flusher.Flush()
 		}
 	}
