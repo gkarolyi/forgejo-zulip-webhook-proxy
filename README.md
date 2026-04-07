@@ -16,7 +16,8 @@ This proxy sits between Forgejo and Zulip and handles all of them.
 
 | Forgejo event | Action |
 |---|---|
-| `pull_request_comment` | Remaps to `issue_comment` format, forwards to Zulip Gitea webhook |
+| `pull_request_comment` (action=`created`/`edited`/`deleted`) | Remaps to `issue_comment` format, forwards to Zulip Gitea webhook |
+| `pull_request_comment` action=`reviewed` | Posts `REVIEWED: reviewer on #N title` via Zulip bot API (review submitted without approve/reject) |
 | `pull_request_approved` | Posts `APPROVED: reviewer on #N title` via Zulip bot API |
 | `pull_request_rejected` | Posts `REQUESTED CHANGES: reviewer on #N title` via Zulip bot API |
 | `pull_request` action=`review_requested` | Posts `user requested review from X on #N title` via Zulip bot API |
@@ -28,17 +29,41 @@ This proxy sits between Forgejo and Zulip and handles all of them.
 
 ### 1. Create a Zulip bot
 
-In Zulip: Settings → Bots → Add a new bot (Generic bot). Note the email and API key.
+In Zulip: **Settings → Bots → Add a new bot** (Generic bot). Note the email and API key.
 
-### 2. Configure and run
+### 2. Get the Gitea webhook URL
 
-```bash
-cp docker-compose.yml docker-compose.override.yml  # or edit directly
-# Fill in the env vars (see docker-compose.yml comments)
-docker compose up -d
+In Zulip: **Settings → Integrations → Gitea** — follow the steps shown. Copy the webhook URL (it ends with `?api_key=...`). This is your `ZULIP_GITEA_WEBHOOK_URL`.
+
+### 3. Run with Docker Compose
+
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  proxy:
+    image: ghcr.io/gkarolyi/forgejo-zulip-webhook-proxy:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # webhook endpoint
+      - "3000:3000"   # web UI
+    environment:
+      ZULIP_GITEA_WEBHOOK_URL: "https://chat.example.org/api/v1/external/gitea?api_key=XXX"
+      ZULIP_BOT_EMAIL: "bot@example.org"
+      # WEBHOOK_SECRET: "..."   # optional: shared secret for HMAC signature validation
+      # UI_PASSWORD: "..."      # optional: password for web UI Basic auth
 ```
 
-### 3. Point Forgejo webhooks at the proxy
+Then start it:
+
+```bash
+docker compose up -d
+docker compose logs -f   # check it's running
+```
+
+To build from source instead, replace `image:` with `build: .`.
+
+### 4. Point Forgejo webhooks at the proxy
 
 In each Forgejo repository, add a webhook with the URL:
 
@@ -51,7 +76,7 @@ http://your-server:8080/?stream=git&topic=my-repo-name
 
 By encoding stream and topic in the webhook URL, each repo can route to its own Zulip topic without any proxy configuration changes. Select all events you want forwarded.
 
-### 4. Optional: signature validation
+### 5. Optional: signature validation
 
 Set `WEBHOOK_SECRET` to the same value as the Forgejo webhook secret. The proxy will reject requests with invalid HMAC-SHA256 signatures.
 
@@ -59,7 +84,7 @@ Set `WEBHOOK_SECRET` to the same value as the Forgejo webhook secret. The proxy 
 
 | Variable | Required | Description |
 |---|---|---|
-| `ZULIP_GITEA_WEBHOOK_URL` | Yes | Zulip Gitea integration URL with `api_key` param (e.g. `https://chat.example.org/api/v1/external/gitea?api_key=XXX`). The site URL and bot API key are derived from this. |
+| `ZULIP_GITEA_WEBHOOK_URL` | Yes | Zulip Gitea integration URL. Find it in Zulip: **Settings → Integrations → Gitea** — copy the webhook URL shown there (it includes `api_key`). Example: `https://chat.example.org/api/v1/external/gitea?api_key=XXX`. The site URL and bot API key are derived from this. Do not add `stream` or `topic` params here; those come from each Forgejo webhook URL. |
 | `ZULIP_BOT_EMAIL` | Yes | Bot email for posting review/reviewer notifications via Zulip API |
 | `WEBHOOK_SECRET` | No | Shared secret for HMAC signature validation of incoming Forgejo webhooks |
 | `UI_PASSWORD` | No | Password for web UI Basic auth (any username). No auth if unset. |
