@@ -139,6 +139,47 @@ func TestPullRequestComment_RemappedToIssueComment(t *testing.T) {
 	}
 }
 
+// TestPullRequestComment_ReviewedAction verifies that a pull_request_comment
+// event with action=="reviewed" (PR review submission without approve/reject)
+// is routed to the Zulip bot API and produces a REVIEWED message.
+func TestPullRequestComment_ReviewedAction(t *testing.T) {
+	webhookURL, _ := captureServer(t)
+	zulipSrv, getMsg := captureZulipAPI(t)
+	p := makeProxy(webhookURL, zulipSrv)
+
+	pl := map[string]any{
+		"action": "reviewed",
+		"pull_request": map[string]any{
+			"number":   float64(39),
+			"title":    "debug: log outgoing payload",
+			"html_url": "https://git.example.com/repo/pulls/39",
+			"state":    "open",
+		},
+		"review": map[string]any{
+			"type":    "comment",
+			"content": "Looks good, just a comment",
+		},
+		"repository": map[string]any{"full_name": "owner/repo"},
+		"sender":     map[string]any{"login": "gergely"},
+	}
+
+	rr := postWebhook(t, p, "pull_request_comment", pl)
+	if rr.Code != http.StatusOK {
+		t.Errorf("response: got %d, want 200", rr.Code)
+	}
+
+	msg := getMsg()
+	if !strings.Contains(msg, "REVIEWED") {
+		t.Errorf("message %q missing REVIEWED prefix", msg)
+	}
+	if !strings.Contains(msg, "gergely") {
+		t.Errorf("message %q missing reviewer name", msg)
+	}
+	if !strings.Contains(msg, "Looks good, just a comment") {
+		t.Errorf("message %q missing review body", msg)
+	}
+}
+
 func TestPullRequestReviewApproved(t *testing.T) {
 	webhookURL, getLastReq := captureServer(t)
 	zulipSrv, getMsg := captureZulipAPI(t)

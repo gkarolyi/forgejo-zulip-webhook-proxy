@@ -179,7 +179,6 @@ func (p *proxy) forwardToGiteaWebhook(pl payload, eventType, stream, topic strin
 	if err != nil {
 		return fmt.Errorf("marshalling payload: %w", err)
 	}
-
 	req, err := http.NewRequest(http.MethodPost, targetURL.String(), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("building request: %w", err)
@@ -262,14 +261,22 @@ func buildRef(number any, title, htmlURL string) string {
 
 // --- event handlers ---
 
-// handlePullRequestComment remaps pull_request_comment → issue_comment so
-// Zulip's Gitea integration can handle it. Zulip checks is_pull=true to know
-// the comment is on a PR, and reads issue.{number,title} for context.
+// handlePullRequestComment handles pull_request_comment events.
 //
-// Forgejo fires pull_request_comment (X-Gitea-Event) for inline review comments
-// (HookEventPullRequestReviewComment). Regular PR thread comments arrive as
-// issue_comment and are forwarded directly by the default case.
+// Forgejo uses this event for two distinct cases:
+//   - action == "reviewed": user submitted a PR review with a comment body
+//     (no approval/rejection). The body is in review.content. Routed to the
+//     bot API so Zulip can render a REVIEWED message.
+//   - action == "created" (or other): inline review comment on a specific line.
+//     Remapped to issue_comment so Zulip's Gitea integration can handle it.
+//
+// Regular PR thread comments (not inline) arrive as issue_comment and are
+// forwarded directly by the default case in ServeHTTP.
 func (p *proxy) handlePullRequestComment(pl payload, stream, topic string) error {
+	if getStringOr(pl, "action", "") == "reviewed" {
+		return p.handlePullRequestReview(pl, "pull_request_comment", stream, topic)
+	}
+
 	pr := getMap(pl, "pull_request")
 	if pr == nil {
 		pr = payload{}
